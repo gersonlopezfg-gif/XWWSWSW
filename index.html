@@ -3,14 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CRM Local - B2C</title>
+    <title>CRM Local V6 - Excel Power</title>
     
-    <!-- 1. LIBRERÍAS (Cargadas desde internet para que el archivo sea ligero) -->
+    <!-- LIBRERÍAS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- LIBRERÍA PARA EXCEL (SheetJS) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
 
     <style>
         .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
@@ -18,80 +21,55 @@
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: #2563eb; }
     </style>
 </head>
-<body class="bg-gray-50 text-gray-900">
+<body class="bg-slate-50 text-gray-900">
 
     <div id="root"></div>
 
     <script type="text/babel">
 
         // ==========================================
-        //  MOTOR DE BASE DE DATOS (IndexedDB Puro)
+        //  MOTOR DE BASE DE DATOS (IndexedDB)
         // ==========================================
-        const DB_NAME = 'CRM_LOCAL_DB_V3'; // Nueva versión para asegurar limpieza
-        const DB_VERSION = 1;
+        const DB_NAME = 'CRM_LOCAL_DB_V3'; 
+        const DB_VERSION = 2;
 
         const LocalDB = {
             db: null,
-            
             async connect() {
                 if (this.db) return this.db;
                 return new Promise((resolve, reject) => {
-                    // Verificar soporte
-                    if (!window.indexedDB) {
-                        reject("Tu navegador no soporta IndexedDB. Intenta usar Chrome o Edge.");
-                        return;
-                    }
-
+                    if (!window.indexedDB) { reject("Navegador no soportado"); return; }
                     const request = indexedDB.open(DB_NAME, DB_VERSION);
-                    
                     request.onupgradeneeded = (event) => {
                         const db = event.target.result;
-                        if (!db.objectStoreNames.contains('contacts')) {
-                            db.createObjectStore('contacts', { keyPath: 'id' });
-                        }
-                        if (!db.objectStoreNames.contains('stages')) {
-                            db.createObjectStore('stages', { keyPath: 'id' });
-                        }
+                        if (!db.objectStoreNames.contains('contacts')) db.createObjectStore('contacts', { keyPath: 'id' });
+                        if (!db.objectStoreNames.contains('stages')) db.createObjectStore('stages', { keyPath: 'id' });
                     };
-                    
-                    request.onsuccess = (event) => {
-                        this.db = event.target.result;
-                        resolve(this.db);
-                    };
-                    
-                    request.onerror = (event) => {
-                        console.error("IndexedDB Error:", event.target.error);
-                        reject("No se pudo abrir la base de datos. Si estás en 'Navegación Privada', intenta en modo normal.");
-                    };
+                    request.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
+                    request.onerror = (e) => reject(e.target.error);
                 });
             },
-
             async getAll(storeName) {
-                try {
-                    const db = await this.connect();
-                    return new Promise((resolve, reject) => {
-                        const tx = db.transaction(storeName, 'readonly');
-                        const store = tx.objectStore(storeName);
-                        const request = store.getAll();
-                        request.onsuccess = () => resolve(request.result || []);
-                        request.onerror = () => reject(request.error);
-                    });
-                } catch (error) { throw error; }
+                const db = await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(storeName, 'readonly');
+                    const req = tx.objectStore(storeName).getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => reject(req.error);
+                });
             },
-
             async save(storeName, item) {
                 const db = await this.connect();
                 return new Promise((resolve, reject) => {
                     const tx = db.transaction(storeName, 'readwrite');
-                    const store = tx.objectStore(storeName);
-                    const request = store.put(item);
-                    request.onsuccess = () => resolve(request.result);
-                    request.onerror = () => reject(request.error);
+                    const req = tx.objectStore(storeName).put(item);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
                 });
             },
-
             async saveBulk(storeName, items) {
                 const db = await this.connect();
                 return new Promise((resolve, reject) => {
@@ -102,15 +80,23 @@
                     tx.onerror = () => reject(tx.error);
                 });
             },
-
             async delete(storeName, id) {
                 const db = await this.connect();
                 return new Promise((resolve, reject) => {
                     const tx = db.transaction(storeName, 'readwrite');
+                    const req = tx.objectStore(storeName).delete(id);
+                    req.onsuccess = () => resolve();
+                    req.onerror = () => reject(req.error);
+                });
+            },
+            async deleteBulk(storeName, ids) {
+                const db = await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(storeName, 'readwrite');
                     const store = tx.objectStore(storeName);
-                    const request = store.delete(id);
-                    request.onsuccess = () => resolve();
-                    request.onerror = () => reject(request.error);
+                    ids.forEach(id => store.delete(id));
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
                 });
             }
         };
@@ -143,142 +129,214 @@
             </div>
         );
 
-        // --- Notificaciones ---
-        const NotificationToast = ({ notifications, removeNotification }) => (
-            <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
-                {notifications.map(notif => (
-                    <div key={notif.id} className="bg-white border-l-4 border-blue-500 shadow-xl rounded-r-md p-4 flex items-start gap-3 w-80 animate-slide-in pointer-events-auto">
-                        <div className="text-blue-500 mt-1"><Icon name="bell" size={20} /></div>
-                        <div className="flex-1">
-                            <h4 className="font-bold text-gray-800 text-sm">{notif.title}</h4>
-                            <p className="text-sm text-gray-600">{notif.message}</p>
-                            <p className="text-xs text-gray-400 mt-1">{notif.time}</p>
+        // --- Modal de Mapeo de Importación ---
+        const ImportMapperModal = ({ headers, sampleRow, onCancel, onFinish }) => {
+            const [mapping, setMapping] = useState({});
+
+            const crmFields = [
+                { key: 'name', label: 'Nombre Completo', required: true },
+                { key: 'phone', label: 'Teléfono / Celular', required: true },
+                { key: 'cedula', label: 'Cédula / ID' },
+                { key: 'segment', label: 'Segmento' },
+                { key: 'department', label: 'Departamento' },
+                { key: 'stage', label: 'Etapa (Texto exacto)' },
+                { key: 'notes', label: 'Nota Inicial' },
+                { key: 'reminder', label: 'Fecha Recordatorio' },
+            ];
+
+            const handleSelectChange = (crmKey, csvIndex) => {
+                setMapping(prev => ({ ...prev, [crmKey]: parseInt(csvIndex) }));
+            };
+
+            const handleImport = () => {
+                if (mapping['name'] === undefined || mapping['name'] === -1) {
+                    alert("Debes asignar al menos la columna de 'Nombre'.");
+                    return;
+                }
+                onFinish(mapping);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+                        <div className="p-6 border-b flex justify-between items-center">
+                            <div>
+                                <h2 className="text-xl font-bold text-gray-800">Asignar Columnas Excel</h2>
+                                <p className="text-sm text-gray-500">Relaciona las columnas de tu Excel con el CRM.</p>
+                            </div>
+                            <button onClick={onCancel}><Icon name="x" size={24} className="text-gray-400"/></button>
                         </div>
-                        <button onClick={() => removeNotification(notif.id)} className="text-gray-400 hover:text-gray-600"><Icon name="x" size={16} /></button>
+                        
+                        <div className="p-6 overflow-y-auto flex-1">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="border-b">
+                                        <th className="pb-2 text-sm font-bold text-gray-600 w-1/3">Campo CRM</th>
+                                        <th className="pb-2 text-sm font-bold text-gray-600">Columna Excel (Ejemplo)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {crmFields.map(field => (
+                                        <tr key={field.key}>
+                                            <td className="py-4 pr-4">
+                                                <label className="block text-sm font-medium text-gray-800">
+                                                    {field.label} {field.required && <span className="text-red-500">*</span>}
+                                                </label>
+                                            </td>
+                                            <td className="py-4">
+                                                <select 
+                                                    className="w-full border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                                    onChange={(e) => handleSelectChange(field.key, e.target.value)}
+                                                    value={mapping[field.key] !== undefined ? mapping[field.key] : -1}
+                                                >
+                                                    <option value={-1}>-- Ignorar / No Importar --</option>
+                                                    {headers.map((h, idx) => (
+                                                        <option key={idx} value={idx}>
+                                                            {h} {sampleRow && sampleRow[idx] ? `(Ej: ${String(sampleRow[idx]).substring(0, 15)}...)` : ''}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="p-6 border-t bg-gray-50 rounded-b-xl flex justify-end gap-3">
+                            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+                            <Button onClick={handleImport}><Icon name="check" size={16}/> Importar Datos</Button>
+                        </div>
                     </div>
-                ))}
-            </div>
-        );
+                </div>
+            );
+        };
+
+        // --- Modal de Exportación ---
+        const ExportModal = ({ onClose, onExport }) => {
+            const [columns, setColumns] = useState({
+                id: false, name: true, phone: true, cedula: true,
+                segment: true, department: true, stage: true,
+                notes: true, reminder: true
+            });
+
+            const labels = {
+                id: "ID Sistema", name: "Nombre", phone: "Teléfono", cedula: "Cédula",
+                segment: "Segmento", department: "Departamento", stage: "Etapa",
+                notes: "Historial Notas", reminder: "Recordatorio"
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+                        <h2 className="text-xl font-bold text-gray-800 mb-4">Exportar Datos</h2>
+                        <div className="grid grid-cols-2 gap-3 mb-6">
+                            {Object.keys(columns).map(key => (
+                                <label key={key} className="flex items-center gap-2 cursor-pointer p-2 border rounded hover:bg-gray-50">
+                                    <input type="checkbox" checked={columns[key]} onChange={() => setColumns({...columns, [key]: !columns[key]})} className="custom-checkbox"/>
+                                    <span className="text-sm text-gray-700">{labels[key]}</span>
+                                </label>
+                            ))}
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+                            <Button onClick={() => onExport(Object.keys(columns).filter(k => columns[k]))}><Icon name="download" size={16}/> Descargar</Button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
         // --- App Principal ---
         function App() {
-            const [status, setStatus] = useState('loading'); // loading, ready, error
-            const [errorMessage, setErrorMessage] = useState("");
-            
+            const [status, setStatus] = useState('loading');
             const [view, setView] = useState('funnel');
             const [contacts, setContacts] = useState([]);
             const [stages, setStages] = useState([]);
             const [isModalOpen, setModalOpen] = useState(false);
             const [editingContact, setEditingContact] = useState(null);
             const [searchTerm, setSearchTerm] = useState("");
+            
+            // Estados para Import/Export
+            const [isExportModalOpen, setExportModalOpen] = useState(false);
+            const [importState, setImportState] = useState({ open: false, headers: [], rows: [] });
             const fileInputRef = useRef(null);
 
-            // Notificaciones
-            const [activeNotifications, setActiveNotifications] = useState([]);
-            const [notifiedTracker, setNotifiedTracker] = useState(new Set());
+            // Selección Masiva
+            const [selectedIds, setSelectedIds] = useState(new Set());
 
-            // Etapas por defecto
             const defaultStages = [
-                { id: 's1', name: 'Por Contactar', color: 'bg-gray-100 border-gray-300 text-gray-700', order: 1 },
-                { id: 's2', name: 'Contactado', color: 'bg-blue-50 border-blue-200 text-blue-700', order: 2 },
-                { id: 's3', name: 'Negociación', color: 'bg-yellow-50 border-yellow-200 text-yellow-700', order: 3 },
-                { id: 's4', name: 'Ganado', color: 'bg-green-50 border-green-200 text-green-700', order: 4 },
-                { id: 's5', name: 'Perdido', color: 'bg-red-50 border-red-200 text-red-700', order: 5 }
+                { id: 's1', name: 'Por Contactar', order: 1 },
+                { id: 's2', name: 'Contactado', order: 2 },
+                { id: 's3', name: 'Negociación', order: 3 },
+                { id: 's4', name: 'Ganado', order: 4 },
+                { id: 's5', name: 'Perdido', order: 5 }
             ];
 
-            // 1. Carga Inicial de Datos
             useEffect(() => {
                 const loadData = async () => {
                     try {
-                        // Intentar conectar primero
                         await LocalDB.connect();
-
-                        // Cargar Contactos
-                        const loadedContacts = await LocalDB.getAll('contacts');
+                        let loadedContacts = await LocalDB.getAll('contacts');
+                        // Asegurar que notas sea array
+                        loadedContacts = loadedContacts.map(c => ({
+                            ...c,
+                            notes: Array.isArray(c.notes) ? c.notes : (c.notes ? [{id: Date.now(), text: c.notes, date: new Date().toISOString()}] : [])
+                        }));
                         setContacts(loadedContacts);
 
-                        // Cargar Etapas
                         let loadedStages = await LocalDB.getAll('stages');
                         if (loadedStages.length === 0) {
                             await LocalDB.saveBulk('stages', defaultStages);
                             loadedStages = defaultStages;
                         }
                         setStages(loadedStages.sort((a,b) => (a.order || 0) - (b.order || 0)));
-                        
                         setStatus('ready');
-                    } catch (e) {
-                        console.error("Error fatal cargando:", e);
-                        setErrorMessage(typeof e === 'string' ? e : e.message);
-                        setStatus('error');
-                    }
+                    } catch (e) { console.error(e); setStatus('error'); }
                 };
                 loadData();
-
-                if ("Notification" in window && Notification.permission !== "granted") {
-                    Notification.requestPermission();
-                }
             }, []);
 
-            // 2. Sistema de Recordatorios
-            useEffect(() => {
-                if (status !== 'ready') return;
-                const interval = setInterval(() => checkReminders(), 30000);
-                return () => clearInterval(interval);
-            }, [contacts, status]);
-
-            const checkReminders = () => {
-                const now = new Date();
-                contacts.forEach(c => {
-                    if (!c.reminder) return;
-                    const remDate = new Date(c.reminder);
-                    const diff = (remDate - now) / 1000 / 60; 
-
-                    if (diff >= 59 && diff <= 61) triggerNotification(c, '1h');
-                    if (diff >= -1 && diff <= 1) triggerNotification(c, 'now');
-                });
+            // --- Selección Masiva ---
+            const handleSelectAll = (e) => {
+                if (e.target.checked) setSelectedIds(new Set(filteredContacts.map(c => c.id)));
+                else setSelectedIds(new Set());
             };
 
-            const triggerNotification = (contact, type) => {
-                const id = `${contact.id}-${type}`;
-                if (notifiedTracker.has(id)) return;
-                const title = type === '1h' ? '⏰ Recordatorio en 1h' : '🚨 ¡Llamar Ahora!';
-                const message = `Contactar a: ${contact.name}`;
-                setActiveNotifications(p => [...p, { id: Date.now(), title, message, time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) }]);
-                if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body: message });
-                setNotifiedTracker(p => new Set(p).add(id));
+            const handleSelectRow = (id) => {
+                const newSet = new Set(selectedIds);
+                newSet.has(id) ? newSet.delete(id) : newSet.add(id);
+                setSelectedIds(newSet);
+            };
+
+            const handleBulkDelete = async () => {
+                if (confirm(`¿Eliminar ${selectedIds.size} contactos?`)) {
+                    await LocalDB.deleteBulk('contacts', Array.from(selectedIds));
+                    setContacts(prev => prev.filter(c => !selectedIds.has(c.id)));
+                    setSelectedIds(new Set());
+                }
             };
 
             // --- CRUD ---
-
-            const handleSave = async (e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                const data = Object.fromEntries(formData.entries());
-                
+            const handleSave = async (contactData) => {
                 const contact = {
                     id: editingContact ? editingContact.id : Date.now().toString(),
-                    ...data,
-                    stageId: data.stageId || stages[0].id
+                    ...contactData,
+                    stageId: contactData.stageId || stages[0].id,
+                    notes: contactData.notes || []
                 };
-
                 await LocalDB.save('contacts', contact);
-                
                 setContacts(prev => {
                     const idx = prev.findIndex(c => c.id === contact.id);
-                    if (idx >= 0) {
-                        const newArr = [...prev];
-                        newArr[idx] = contact;
-                        return newArr;
-                    }
+                    if (idx >= 0) { const n = [...prev]; n[idx] = contact; return n; }
                     return [...prev, contact];
                 });
-
                 setModalOpen(false);
                 setEditingContact(null);
             };
 
             const handleDelete = async (id) => {
-                if(confirm("¿Borrar este contacto permanentemente?")) {
+                if(confirm("¿Borrar contacto?")) {
                     await LocalDB.delete('contacts', id);
                     setContacts(prev => prev.filter(c => c.id !== id));
                     setModalOpen(false);
@@ -291,161 +349,143 @@
                 if (idx === -1) return;
                 const newIdx = direction === 'next' ? idx + 1 : idx - 1;
                 if (newIdx >= 0 && newIdx < stages.length) {
-                    const updatedContact = { ...contact, stageId: stages[newIdx].id };
-                    await LocalDB.save('contacts', updatedContact);
-                    setContacts(prev => prev.map(c => c.id === contact.id ? updatedContact : c));
+                    const updated = { ...contact, stageId: stages[newIdx].id };
+                    await LocalDB.save('contacts', updated);
+                    setContacts(prev => prev.map(c => c.id === contact.id ? updated : c));
                 }
             };
 
-            const quickStageChange = async (contact, newStageId) => {
-                const updatedContact = { ...contact, stageId: newStageId };
-                await LocalDB.save('contacts', updatedContact);
-                setContacts(prev => prev.map(c => c.id === contact.id ? updatedContact : c));
-            };
-
-            // --- Import/Export ---
-            const handleExport = () => {
-                const headers = ["ID,Nombre,Telefono,Cedula,Segmento,Departamento,Etapa,Notas,Recordatorio"];
-                const rows = contacts.map(c => {
-                    const stageName = stages.find(s => s.id === c.stageId)?.name || 'Desconocido';
-                    return [c.id, c.name, c.phone, c.cedula, c.segment, c.department, stageName, c.notes, c.reminder]
-                        .map(f => `"${(f || '').toString().replace(/"/g, '""')}"`).join(',');
+            // --- Importación / Exportación ---
+            const performExport = (columns) => {
+                // Usamos SheetJS para exportar a XLSX
+                const data = contacts.map(c => {
+                    const row = {};
+                    columns.forEach(key => {
+                        let val = c[key] || '';
+                        if (key === 'stage') val = stages.find(s => s.id === c.stageId)?.name || '';
+                        if (key === 'notes' && Array.isArray(val)) val = val.map(n => n.text).join(' | ');
+                        row[key.toUpperCase()] = val;
+                    });
+                    return row;
                 });
-                const csv = [headers, ...rows].join('\n');
-                const blob = new Blob([csv], { type: 'text/csv' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `crm_backup_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`;
-                a.click();
+
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Contactos");
+                XLSX.writeFile(wb, `crm_export_${new Date().toISOString().slice(0,10)}.xlsx`);
+                setExportModalOpen(false);
             };
 
-            const handleImport = (e) => {
+            const handleFileSelect = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                
                 const reader = new FileReader();
-                reader.onload = async (evt) => {
-                    const text = evt.target.result;
-                    const lines = text.split('\n').slice(1);
-                    let importedCount = 0;
-                    for (const line of lines) {
-                        if (!line.trim()) continue;
-                        const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(val => val.replace(/^"|"$/g, '').replace(/""/g, '"').trim());
-                        if (cols.length < 2) continue;
-                        const stageName = cols[6];
-                        const matchedStage = stages.find(s => s.name.toLowerCase() === (stageName || '').toLowerCase());
-                        const newContact = {
-                            id: Date.now().toString() + Math.random().toString().slice(2,5),
-                            name: cols[1] || 'Sin Nombre',
-                            phone: cols[2] || '',
-                            cedula: cols[3] || '',
-                            segment: cols[4] || '',
-                            department: cols[5] || '',
-                            stageId: matchedStage ? matchedStage.id : stages[0].id,
-                            notes: cols[7] || '',
-                            reminder: cols[8] || ''
-                        };
-                        await LocalDB.save('contacts', newContact);
-                        importedCount++;
+                reader.onload = (evt) => {
+                    try {
+                        const data = new Uint8Array(evt.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                        
+                        if (jsonData.length < 2) {
+                            alert("El archivo parece estar vacío o no tiene cabeceras.");
+                            return;
+                        }
+
+                        const headers = jsonData[0].map(h => String(h).trim());
+                        const rows = jsonData.slice(1); 
+
+                        setImportState({ open: true, headers, rows });
+                    } catch (error) {
+                        console.error("Error leyendo archivo:", error);
+                        alert("Error al leer el archivo. Asegúrate de que sea un Excel (.xlsx, .xls) o CSV válido.");
                     }
-                    const all = await LocalDB.getAll('contacts');
-                    setContacts(all);
-                    alert(`Importados ${importedCount} contactos.`);
                     e.target.value = '';
                 };
-                reader.readAsText(file);
+                reader.readAsArrayBuffer(file);
             };
 
-            // --- Configuración Etapas ---
-            const SettingsView = () => {
-                const [localStages, setLocalStages] = useState(stages);
-                const handleSaveStages = async () => {
-                    await LocalDB.saveBulk('stages', localStages);
-                    const currentIds = localStages.map(s => s.id);
-                    const toDelete = stages.filter(s => !currentIds.includes(s.id));
-                    for (const s of toDelete) {
-                        if (contacts.some(c => c.stageId === s.id)) {
-                            alert(`No se puede borrar "${s.name}" porque tiene contactos.`);
-                            return; 
+            const executeImport = async (mapping) => {
+                let count = 0;
+                for (const row of importState.rows) {
+                    if (!row || row.length === 0) continue;
+                    
+                    const getValue = (key) => {
+                        const idx = mapping[key];
+                        if (idx !== undefined && idx !== -1 && row[idx] !== undefined) {
+                            return String(row[idx]).trim();
                         }
-                        await LocalDB.delete('stages', s.id);
+                        return '';
+                    };
+
+                    let stageId = stages[0].id;
+                    const mapStageName = getValue('stage');
+                    if (mapStageName) {
+                        const found = stages.find(s => s.name.toLowerCase() === mapStageName.toLowerCase());
+                        if (found) stageId = found.id;
                     }
-                    setStages(localStages);
-                    alert("Guardado.");
-                };
-                return (
-                    <Card className="max-w-2xl mx-auto p-6">
-                        <h2 className="text-xl font-bold mb-4">Configurar Embudo</h2>
-                        <div className="space-y-3">
-                            {localStages.map((s, idx) => (
-                                <div key={s.id} className="flex gap-2 items-center">
-                                    <div className="bg-gray-100 w-8 h-8 flex items-center justify-center rounded font-bold text-xs">{idx + 1}</div>
-                                    <input value={s.name} onChange={(e) => {
-                                        const newArr = [...localStages];
-                                        newArr[idx] = { ...s, name: e.target.value };
-                                        setLocalStages(newArr);
-                                    }} className="flex-1 border rounded px-3 py-2" />
-                                    <button onClick={() => setLocalStages(localStages.filter(st => st.id !== s.id))} className="text-red-500 p-2 hover:bg-red-50 rounded"><Icon name="trash-2" size={18} /></button>
-                                </div>
-                            ))}
-                        </div>
-                        <Button onClick={() => setLocalStages([...localStages, { id: 's' + Date.now(), name: 'Nueva', color: 'bg-gray-100', order: localStages.length + 1 }])} variant="secondary" className="w-full mt-4 dashed border-2"><Icon name="plus" size={16} /> Agregar</Button>
-                        <div className="flex justify-end gap-2 mt-6"><Button onClick={handleSaveStages}>Guardar</Button></div>
-                    </Card>
-                );
+
+                    const newC = {
+                        id: Date.now().toString() + Math.random().toString().slice(2,5),
+                        name: getValue('name') || 'Desconocido',
+                        phone: getValue('phone'),
+                        cedula: getValue('cedula'),
+                        segment: getValue('segment'),
+                        department: getValue('department'),
+                        stageId: stageId,
+                        notes: getValue('notes') ? [{id: Date.now(), text: getValue('notes'), date: new Date().toISOString()}] : [],
+                        reminder: getValue('reminder')
+                    };
+                    await LocalDB.save('contacts', newC);
+                    count++;
+                }
+                const all = await LocalDB.getAll('contacts');
+                setContacts(all);
+                setImportState({ open: false, headers: [], rows: [] });
+                alert(`Importación finalizada: ${count} contactos agregados.`);
             };
 
-            // --- Render Principal ---
-
-            if (status === 'loading') return (
-                <div className="h-screen flex flex-col items-center justify-center text-gray-500 gap-4">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-                    <p>Cargando tus contactos...</p>
-                </div>
-            );
-
-            if (status === 'error') return (
-                <div className="h-screen flex flex-col items-center justify-center p-8 bg-red-50 text-center">
-                    <div className="bg-white p-8 rounded-xl shadow-xl max-w-md">
-                        <div className="text-red-500 mb-4 mx-auto w-12 h-12 flex items-center justify-center bg-red-100 rounded-full"><Icon name="alert-triangle" size={24} /></div>
-                        <h1 className="text-xl font-bold text-gray-800 mb-2">Algo salió mal</h1>
-                        <p className="text-gray-600 mb-4">{errorMessage}</p>
-                        <p className="text-xs text-gray-400">Intenta cerrar pestañas o usar un navegador normal (no privado).</p>
-                        <Button onClick={() => window.location.reload()} className="mt-4 w-full">Recargar Página</Button>
-                    </div>
-                </div>
-            );
-
-            const filtered = contacts.filter(c => c.name?.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone?.includes(searchTerm));
+            // --- Render ---
+            if (status === 'loading') return <div className="h-screen flex items-center justify-center animate-pulse text-gray-500">Cargando...</div>;
+            
+            // FIX: Safe filtering
+            const filteredContacts = contacts.filter(c => {
+                const n = c.name || "";
+                const p = c.phone || "";
+                return n.toLowerCase().includes(searchTerm.toLowerCase()) || p.includes(searchTerm);
+            });
 
             return (
                 <div className="flex h-screen overflow-hidden">
-                    <NotificationToast notifications={activeNotifications} removeNotification={(id) => setActiveNotifications(p => p.filter(n => n.id !== id))} />
-
+                    
                     {/* Sidebar */}
                     <div className="w-20 md:w-64 bg-slate-900 text-white flex flex-col shadow-xl z-10">
                         <div className="p-6 flex items-center gap-3 border-b border-slate-800">
                             <div className="bg-blue-500 p-2 rounded shadow-lg"><Icon name="database" className="text-white" /></div>
-                            <span className="font-bold text-xl hidden md:block">ColdCRM</span>
+                            <span className="font-bold text-xl hidden md:block">ColdCRM V6</span>
                         </div>
                         <nav className="flex-1 p-3 space-y-2 mt-4">
                             <button onClick={() => setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'funnel' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="layout" /> <span className="hidden md:block font-medium">Embudo</span></button>
                             <button onClick={() => setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'contacts' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="users" /> <span className="hidden md:block font-medium">Contactos</span></button>
                             <button onClick={() => setView('settings')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'settings' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="settings" /> <span className="hidden md:block font-medium">Configurar</span></button>
                         </nav>
-                        <div className="p-4 text-xs text-slate-500 text-center hidden md:block">V2.0 Local (IndexedDB)</div>
                     </div>
 
-                    {/* Main Content */}
+                    {/* Main */}
                     <main className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50">
                         <header className="h-16 bg-white border-b flex items-center justify-between px-6 flex-shrink-0 shadow-sm">
-                            <h1 className="text-xl font-bold text-slate-800">{view === 'funnel' && 'Embudo'} {view === 'contacts' && 'Contactos'} {view === 'settings' && 'Configuración'}</h1>
+                            <h1 className="text-xl font-bold text-slate-800 capitalize">
+                                {view === 'contacts' ? `Directorio (${contacts.length})` : view}
+                            </h1>
                             <div className="flex gap-2">
                                 {view === 'contacts' && (
                                     <>
-                                        <Button variant="secondary" onClick={() => fileInputRef.current.click()}><Icon name="upload" size={16} /> <span className="hidden md:inline">Importar</span></Button>
-                                        <Button variant="secondary" onClick={handleExport}><Icon name="download" size={16} /> <span className="hidden md:inline">Exportar</span></Button>
-                                        <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleImport} />
+                                        <Button variant="secondary" onClick={() => fileInputRef.current.click()}><Icon name="upload" size={16} /> <span className="hidden md:inline">Importar Excel</span></Button>
+                                        <Button variant="secondary" onClick={() => setExportModalOpen(true)}><Icon name="download" size={16} /> <span className="hidden md:inline">Exportar</span></Button>
+                                        <input type="file" ref={fileInputRef} className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileSelect} />
                                     </>
                                 )}
                                 <Button onClick={() => { setEditingContact(null); setModalOpen(true); }}><Icon name="plus" size={16} /> <span className="hidden md:inline">Nuevo</span></Button>
@@ -453,30 +493,45 @@
                         </header>
 
                         <div className="flex-1 overflow-auto p-6">
-                            {view === 'settings' && <SettingsView />}
                             
                             {view === 'contacts' && (
-                                <Card className="p-4 h-full flex flex-col border-0 shadow-md">
-                                    <div className="mb-4 relative">
-                                        <Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18} />
-                                        <input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <Card className="flex flex-col h-full border-0 shadow-md overflow-hidden">
+                                    <div className="p-4 border-b bg-white flex justify-between items-center gap-4">
+                                        <div className="relative flex-1 max-w-md">
+                                            <Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18} />
+                                            <input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                        </div>
+                                        {selectedIds.size > 0 && (
+                                            <div className="animate-slide-in flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg">
+                                                <span className="font-bold text-sm">{selectedIds.size} seleccionados</span>
+                                                <button onClick={handleBulkDelete} className="flex items-center gap-1 hover:text-red-900 font-medium text-sm"><Icon name="trash-2" size={16} /> Borrar</button>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex-1 overflow-auto">
-                                        {filtered.length === 0 && <div className="text-center text-gray-400 mt-20">No hay resultados.</div>}
-                                        {filtered.map(c => (
-                                            <div key={c.id} className="flex justify-between p-4 border-b hover:bg-blue-50/50 items-center transition-colors">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm">{c.name.substring(0,2).toUpperCase()}</div>
-                                                    <div><div className="font-bold text-gray-800">{c.name}</div><div className="text-sm text-gray-500 flex items-center gap-2"><Icon name="phone" size={12} /> {c.phone}</div></div>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                    <select value={c.stageId} onChange={(e) => quickStageChange(c, e.target.value)} className="bg-gray-100 border-none text-xs rounded-full px-3 py-1 cursor-pointer hover:bg-gray-200 outline-none">
-                                                        {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                                    </select>
-                                                    <Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }} className="text-blue-600"><Icon name="edit-3" size={16} /></Button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                        <table className="w-full text-left border-collapse">
+                                            <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                                                <tr>
+                                                    <th className="p-4 w-10"><input type="checkbox" className="custom-checkbox" onChange={handleSelectAll} checked={filteredContacts.length > 0 && selectedIds.size === filteredContacts.length}/></th>
+                                                    <th className="p-4 text-sm font-semibold text-gray-600">Nombre</th>
+                                                    <th className="p-4 text-sm font-semibold text-gray-600">Teléfono</th>
+                                                    <th className="p-4 text-sm font-semibold text-gray-600">Etapa</th>
+                                                    <th className="p-4 text-sm font-semibold text-gray-600">Acciones</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100 bg-white">
+                                                {filteredContacts.map(c => (
+                                                    <tr key={c.id} className={`hover:bg-blue-50/50 transition-colors ${selectedIds.has(c.id) ? 'bg-blue-50' : ''}`}>
+                                                        <td className="p-4"><input type="checkbox" className="custom-checkbox" checked={selectedIds.has(c.id)} onChange={() => handleSelectRow(c.id)}/></td>
+                                                        <td className="p-4"><div className="font-bold text-gray-800">{c.name}</div><div className="text-xs text-gray-500">{c.segment}</div></td>
+                                                        <td className="p-4 text-gray-600">{c.phone}</td>
+                                                        <td className="p-4"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-medium">{stages.find(s => s.id === c.stageId)?.name || '---'}</span></td>
+                                                        <td className="p-4"><Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }} className="text-blue-600"><Icon name="edit-3" size={16} /></Button></td>
+                                                    </tr>
+                                                ))}
+                                                {filteredContacts.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-400">No hay contactos.</td></tr>}
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </Card>
                             )}
@@ -486,17 +541,14 @@
                                     {stages.map((stage, idx) => (
                                         <div key={stage.id} className="min-w-[300px] w-[300px] flex flex-col h-full">
                                             <div className={`p-3 rounded-t-lg font-bold flex justify-between bg-white border-b-4 border-blue-500/20 shadow-sm mb-2`}>
-                                                {stage.name}
-                                                <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs flex items-center font-bold">{contacts.filter(c => c.stageId === stage.id).length}</span>
+                                                {stage.name} <span className="bg-gray-100 px-2 rounded-full text-xs flex items-center font-bold">{contacts.filter(c => c.stageId === stage.id).length}</span>
                                             </div>
                                             <div className="bg-slate-100/50 flex-1 p-2 overflow-y-auto rounded-b-lg border border-slate-200/50">
                                                 {contacts.filter(c => c.stageId === stage.id).map(c => (
-                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-4 mb-3 rounded-lg shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 cursor-pointer group relative transition-all">
+                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-4 mb-3 rounded-lg shadow-sm border border-gray-100 hover:shadow-md cursor-pointer relative group">
                                                         <div className="font-bold text-gray-800">{c.name}</div>
                                                         <div className="text-sm text-gray-500 mb-2">{c.phone}</div>
-                                                        <div className="flex gap-2 mt-2">{c.segment && <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100 uppercase font-bold tracking-wider">{c.segment}</span>}</div>
-                                                        {c.reminder && <div className="text-xs text-orange-600 mt-2 pt-2 border-t border-gray-50 flex gap-1 items-center font-medium"><Icon name="clock" size={12}/> {new Date(c.reminder).toLocaleDateString()}</div>}
-                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm rounded p-1">
+                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm rounded p-1 z-10">
                                                             {idx > 0 && <button onClick={(e) => moveStage(c, 'prev', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-left" size={16}/></button>}
                                                             {idx < stages.length - 1 && <button onClick={(e) => moveStage(c, 'next', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-right" size={16}/></button>}
                                                         </div>
@@ -507,56 +559,62 @@
                                     ))}
                                 </div>
                             )}
+
+                            {view === 'settings' && (
+                                <Card className="p-6 max-w-lg mx-auto text-center">
+                                    <h2 className="text-xl font-bold mb-4">Configuración</h2>
+                                    <p>CRM V6 - Local con Soporte Excel (.xlsx)</p>
+                                </Card>
+                            )}
                         </div>
                     </main>
 
-                    {/* Modal */}
+                    {/* MODAL EDICIÓN CONTACTO */}
                     {isModalOpen && (
-                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scale-100 animate-in zoom-in-95 duration-200">
-                                <form onSubmit={handleSave} className="p-6">
-                                    <div className="flex justify-between items-center mb-6 pb-4 border-b">
-                                        <h2 className="text-xl font-bold text-gray-800">{editingContact ? 'Editar' : 'Nuevo'} Contacto</h2>
-                                        <button type="button" onClick={() => setModalOpen(false)} className="text-gray-400 hover:text-gray-600"><Icon name="x" size={24} /></button>
+                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+                                <form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const fd = new FormData(e.target);
+                                    const d = Object.fromEntries(fd.entries());
+                                    handleSave({ ...d, notes: editingContact?.notes || [] });
+                                }} className="flex flex-col h-full">
+                                    <div className="flex justify-between items-center p-6 border-b">
+                                        <h2 className="text-xl font-bold">{editingContact ? 'Editar' : 'Nuevo'}</h2>
+                                        <button type="button" onClick={() => setModalOpen(false)}><Icon name="x" className="text-gray-400"/></button>
                                     </div>
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Etapa</label>
-                                            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                                                {stages.map(s => (
-                                                    <label key={s.id} className={`px-3 py-1.5 rounded-full border text-sm cursor-pointer whitespace-nowrap transition-all ${ (editingContact?.stageId || stages[0].id) === s.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                                                        <input type="radio" name="stageId" value={s.id} defaultChecked={(editingContact?.stageId || stages[0].id) === s.id} className="hidden" />
-                                                        {s.name}
-                                                    </label>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <Input name="name" label="Nombre" defaultValue={editingContact?.name} required />
-                                            <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required />
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <Input name="cedula" label="Cédula" defaultValue={editingContact?.cedula} />
-                                            <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} />
-                                        </div>
-                                        <Input name="department" label="Departamento" defaultValue={editingContact?.department} />
+                                    <div className="p-6 overflow-y-auto flex-1 grid grid-cols-2 gap-4">
+                                        <div className="col-span-2"><label className="text-xs font-bold text-gray-500 uppercase">Etapa</label>
+                                        <select name="stageId" defaultValue={editingContact?.stageId || stages[0].id} className="w-full border p-2 rounded">{stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+                                        <Input name="name" label="Nombre" defaultValue={editingContact?.name} required />
+                                        <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required />
+                                        <Input name="cedula" label="Cédula" defaultValue={editingContact?.cedula} />
+                                        <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} />
+                                        <Input name="department" label="Depto" defaultValue={editingContact?.department} />
                                         <Input name="reminder" type="datetime-local" label="Recordatorio" defaultValue={editingContact?.reminder} />
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
-                                            <textarea name="notes" className="w-full border border-gray-300 rounded-lg p-3 h-24 focus:ring-2 focus:ring-blue-500 outline-none text-sm" defaultValue={editingContact?.notes}></textarea>
-                                        </div>
                                     </div>
-                                    <div className="flex justify-between mt-8 pt-4 border-t">
-                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}><Icon name="trash-2" size={16}/> Eliminar</Button> : <div></div>}
-                                        <div className="flex gap-3">
-                                            <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-                                            <Button type="submit"><Icon name="save" size={16}/> Guardar</Button>
-                                        </div>
+                                    <div className="p-6 border-t flex justify-between bg-gray-50 rounded-b-xl">
+                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}>Eliminar</Button> : <div></div>}
+                                        <div className="flex gap-2"><Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button><Button type="submit">Guardar</Button></div>
                                     </div>
                                 </form>
                             </div>
                         </div>
                     )}
+
+                    {/* MODAL EXPORTACIÓN */}
+                    {isExportModalOpen && <ExportModal onClose={() => setExportModalOpen(false)} onExport={performExport} />}
+
+                    {/* MODAL MAPEO IMPORTACIÓN */}
+                    {importState.open && (
+                        <ImportMapperModal 
+                            headers={importState.headers} 
+                            sampleRow={importState.rows[0]} 
+                            onCancel={() => setImportState({open:false, headers:[], rows:[]})}
+                            onFinish={executeImport}
+                        />
+                    )}
+
                 </div>
             );
         }
