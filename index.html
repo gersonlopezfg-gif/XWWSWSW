@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM B2C - Portable</title>
+    
+    <!-- 1. Estilos (Tailwind CSS) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Librerías de React y Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 3. Librería de Iconos (Lucide) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- 4. Firebase (Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-900">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // ==========================================
+        //  CONFIGURACIÓN DE FIREBASE
+        // ==========================================
+        
+        // 1. Configuración Manual (Para cuando descargues el archivo)
+        // Reemplaza estos valores con los de tu consola de Firebase
+        const manualConfig = {
+            apiKey: "PON_TU_API_KEY_AQUI",
+            authDomain: "tu-proyecto.firebaseapp.com",
+            projectId: "tu-proyecto",
+            storageBucket: "tu-proyecto.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:..."
+        };
+
+        // 2. Lógica de Selección de Configuración
+        // Si estamos en el entorno de prueba, usa la config automática.
+        // Si estás en tu PC, usará 'manualConfig'.
+        let firebaseConfig = manualConfig;
+        let currentAppId = "mi_crm_personal_v1";
+
+        if (typeof __firebase_config !== 'undefined') {
+            try {
+                firebaseConfig = JSON.parse(__firebase_config);
+                if (typeof __app_id !== 'undefined') currentAppId = __app_id;
+            } catch (e) { console.error("Error parsing environment config", e); }
+        }
+
+        // ==========================================
+        //  INICIALIZACIÓN DE FIREBASE
+        // ==========================================
+        let app, auth, db;
+        let initError = null;
+
+        try {
+            if (!firebase.apps.length) {
+                app = firebase.initializeApp(firebaseConfig);
+            } else {
+                app = firebase.app();
+            }
+            auth = firebase.auth();
+            db = firebase.firestore();
+            db.enablePersistence().catch(err => console.log("Persistencia offline no disponible:", err.code));
+        } catch (error) {
+            console.error("Error inicializando Firebase:", error);
+            initError = error.message;
+        }
+
+        const { useState, useEffect, useRef } = React;
+
+        // --- Componente de Icono ---
+        const Icon = ({ name, size = 24, className = "" }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+        };
+
+        // --- Componentes UI ---
+        const Card = ({ children, className = "" }) => <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${className}`}>{children}</div>;
+        
+        const Button = ({ children, onClick, variant = "primary", className = "", disabled = false }) => {
+            const base = "px-4 py-2 rounded-md font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50";
+            const vars = {
+                primary: "bg-blue-600 text-white hover:bg-blue-700",
+                secondary: "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50",
+                danger: "bg-red-50 text-red-600 hover:bg-red-100",
+                ghost: "text-gray-600 hover:bg-gray-100"
+            };
+            return <button onClick={onClick} disabled={disabled} className={`${base} ${vars[variant]} ${className}`}>{children}</button>;
+        };
+
+        const Input = ({ label, ...props }) => (
+            <div className="mb-4">
+                {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+                <input className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" {...props} />
+            </div>
+        );
+
+        // --- App Principal ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [authError, setAuthError] = useState(initError);
+            const [view, setView] = useState('funnel');
+            const [contacts, setContacts] = useState([]);
+            const [stages, setStages] = useState([]);
+            const [isModalOpen, setModalOpen] = useState(false);
+            const [editingContact, setEditingContact] = useState(null);
+            const [searchTerm, setSearchTerm] = useState("");
+            
+            const defaultStages = [
+                { id: 's1', name: 'Por Contactar', color: 'bg-gray-100 border-gray-300 text-gray-700', order: 1 },
+                { id: 's2', name: 'Contactado', color: 'bg-blue-50 border-blue-200 text-blue-700', order: 2 },
+                { id: 's3', name: 'Negociación', color: 'bg-yellow-50 border-yellow-200 text-yellow-700', order: 3 },
+                { id: 's4', name: 'Ganado', color: 'bg-green-50 border-green-200 text-green-700', order: 4 },
+                { id: 's5', name: 'Perdido', color: 'bg-red-50 border-red-200 text-red-700', order: 5 }
+            ];
+
+            // 1. Autenticación
+            useEffect(() => {
+                if (!auth) { setLoading(false); return; }
+                
+                // Intentar login anónimo
+                auth.signInAnonymously().catch(e => {
+                    console.error("Error Auth:", e);
+                    setAuthError(e.message);
+                    setLoading(false);
+                });
+
+                const unsubscribe = auth.onAuthStateChanged(u => {
+                    setUser(u);
+                    if (u) setAuthError(null); // Limpiar error si logramos entrar
+                    setLoading(false);
+                });
+                return unsubscribe;
+            }, []);
+
+            // 2. Cargar Datos
+            useEffect(() => {
+                if (!user || !db) return;
+                const userRef = db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid);
+                
+                const unsubStages = userRef.collection('stages').onSnapshot(snap => {
+                    const data = snap.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => a.order - b.order);
+                    if (data.length === 0) {
+                        defaultStages.forEach(s => userRef.collection('stages').doc(s.id).set(s));
+                    } else {
+                        setStages(data);
+                    }
+                });
+
+                const unsubContacts = userRef.collection('contacts').onSnapshot(snap => {
+                    setContacts(snap.docs.map(d => ({id: d.id, ...d.data()})));
+                });
+
+                return () => { unsubStages(); unsubContacts(); };
+            }, [user]);
+
+            // 3. Guardar Contacto
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if(!user) return;
+                const formData = new FormData(e.target);
+                const data = Object.fromEntries(formData.entries());
+                const id = editingContact ? editingContact.id : Date.now().toString();
+                await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
+                    .collection('contacts').doc(id).set({ ...data, stageId: data.stageId || stages[0].id }, { merge: true });
+                setModalOpen(false);
+                setEditingContact(null);
+            };
+
+            // 4. Borrar
+            const handleDelete = async (id) => {
+                if(confirm("¿Borrar contacto?")) {
+                    await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
+                        .collection('contacts').doc(id).delete();
+                    setModalOpen(false);
+                }
+            };
+
+            // 5. Mover Etapa
+            const moveStage = async (contact, direction, e) => {
+                e.stopPropagation();
+                const idx = stages.findIndex(s => s.id === contact.stageId);
+                if (idx === -1) return;
+                const newIdx = direction === 'next' ? idx + 1 : idx - 1;
+                if (newIdx >= 0 && newIdx < stages.length) {
+                    await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
+                        .collection('contacts').doc(contact.id).update({ stageId: stages[newIdx].id });
+                }
+            };
+            
+            // Pantallas de Estado
+            if (loading) return <div className="h-screen flex items-center justify-center text-gray-500">Cargando CRM...</div>;
+
+            if (authError) return (
+                <div className="h-screen flex flex-col items-center justify-center p-8 bg-red-50 text-center">
+                    <div className="bg-white p-8 rounded-lg shadow-xl max-w-md">
+                        <h1 className="text-2xl font-bold text-red-600 mb-4">Falta Configuración</h1>
+                        <p className="mb-4 text-gray-700">
+                            Para usar este CRM en tu computadora, necesitas conectarlo a tu propia base de datos de Firebase.
+                        </p>
+                        <div className="bg-gray-100 p-4 rounded text-left text-sm font-mono mb-4 overflow-x-auto">
+                            const manualConfig = &#123;<br/>
+                            &nbsp;&nbsp;apiKey: "PON_TU_API_KEY_AQUI",<br/>
+                            &nbsp;&nbsp;...<br/>
+                            &#125;;
+                        </div>
+                        <p className="text-sm text-gray-500">
+                            Abre este archivo <b>index.html</b> con el Bloc de Notas y reemplaza los valores en <code>manualConfig</code>.
+                        </p>
+                        <p className="mt-4 text-xs text-red-400">Error técnico: {authError}</p>
+                    </div>
+                </div>
+            );
+
+            const filtered = contacts.filter(c => 
+                c.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                c.phone?.includes(searchTerm)
+            );
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    {/* Sidebar */}
+                    <div className="w-20 md:w-64 bg-slate-900 text-white flex flex-col">
+                        <div className="p-6 flex items-center gap-3 border-b border-slate-800">
+                            <div className="bg-blue-500 p-2 rounded"><Icon name="phone" className="text-white" /></div>
+                            <span className="font-bold text-xl hidden md:block">CRM Portable</span>
+                        </div>
+                        <nav className="flex-1 p-2 space-y-2 mt-4">
+                            <button onClick={() => setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded ${view === 'funnel' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}>
+                                <Icon name="layout" /> <span className="hidden md:block">Embudo</span>
+                            </button>
+                            <button onClick={() => setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded ${view === 'contacts' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}>
+                                <Icon name="users" /> <span className="hidden md:block">Contactos</span>
+                            </button>
+                        </nav>
+                        <div className="p-4 border-t border-slate-800 text-xs text-slate-400 hidden md:block">
+                            User: {user?.uid?.slice(0,8)}...
+                        </div>
+                    </div>
+
+                    {/* Main */}
+                    <main className="flex-1 flex flex-col h-screen overflow-hidden">
+                        <header className="h-16 bg-white border-b flex items-center justify-between px-6 flex-shrink-0">
+                            <h1 className="text-xl font-bold">{view === 'funnel' ? 'Embudo de Ventas' : 'Lista de Contactos'}</h1>
+                            <Button onClick={() => { setEditingContact(null); setModalOpen(true); }}>
+                                <Icon name="plus" size={16} /> Nuevo
+                            </Button>
+                        </header>
+
+                        <div className="flex-1 overflow-auto p-6">
+                            {view === 'contacts' && (
+                                <Card className="p-4 h-full flex flex-col">
+                                    <div className="mb-4 relative">
+                                        <Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18} />
+                                        <input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                    </div>
+                                    <div className="flex-1 overflow-auto">
+                                        {filtered.length === 0 && <div className="text-center text-gray-400 mt-10">No hay contactos aún.</div>}
+                                        {filtered.map(c => (
+                                            <div key={c.id} className="flex justify-between p-3 border-b hover:bg-gray-50 items-center">
+                                                <div>
+                                                    <div className="font-bold">{c.name}</div>
+                                                    <div className="text-sm text-gray-500">{c.phone}</div>
+                                                </div>
+                                                <Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }}>Editar</Button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </Card>
+                            )}
+
+                            {view === 'funnel' && (
+                                <div className="flex h-full gap-4 overflow-x-auto pb-2">
+                                    {stages.map((stage, idx) => (
+                                        <div key={stage.id} className="min-w-[300px] w-[300px] flex flex-col h-full">
+                                            <div className={`p-3 rounded-t font-bold flex justify-between bg-white border-b-4 border-gray-200`}>
+                                                {stage.name}
+                                                <span className="bg-gray-100 px-2 rounded-full text-xs flex items-center">{contacts.filter(c => c.stageId === stage.id).length}</span>
+                                            </div>
+                                            <div className="bg-gray-50 flex-1 p-2 overflow-y-auto rounded-b border border-gray-200">
+                                                {contacts.filter(c => c.stageId === stage.id).map(c => (
+                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-3 mb-2 rounded shadow-sm hover:shadow-md cursor-pointer group relative">
+                                                        <div className="font-bold">{c.name}</div>
+                                                        <div className="text-sm text-gray-500">{c.phone}</div>
+                                                        {c.reminder && <div className="text-xs text-orange-600 mt-1 flex gap-1 items-center"><Icon name="clock" size={12}/> {new Date(c.reminder).toLocaleDateString()}</div>}
+                                                        
+                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100">
+                                                            {idx > 0 && <button onClick={(e) => moveStage(c, 'prev', e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-left" size={14}/></button>}
+                                                            {idx < stages.length - 1 && <button onClick={(e) => moveStage(c, 'next', e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-right" size={14}/></button>}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </main>
+
+                    {/* Modal */}
+                    {isModalOpen && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                                <form onSubmit={handleSave} className="p-6">
+                                    <h2 className="text-xl font-bold mb-4">{editingContact ? 'Editar' : 'Nuevo'} Contacto</h2>
+                                    
+                                    <label className="block text-sm font-medium mb-2">Etapa</label>
+                                    <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+                                        {stages.map(s => (
+                                            <label key={s.id} className={`px-3 py-1 rounded-full border text-sm cursor-pointer whitespace-nowrap ${ (editingContact?.stageId || stages[0].id) === s.id ? 'bg-blue-600 text-white' : ''}`}>
+                                                <input type="radio" name="stageId" value={s.id} defaultChecked={(editingContact?.stageId || stages[0].id) === s.id} className="hidden" />
+                                                {s.name}
+                                            </label>
+                                        ))}
+                                    </div>
+
+                                    <Input name="name" label="Nombre" defaultValue={editingContact?.name} required />
+                                    <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required />
+                                    <Input name="cedula" label="Cédula" defaultValue={editingContact?.cedula} />
+                                    <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} />
+                                    <Input name="department" label="Departamento" defaultValue={editingContact?.department} />
+                                    <Input name="reminder" type="datetime-local" label="Recordatorio" defaultValue={editingContact?.reminder} />
+                                    
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium mb-1">Notas</label>
+                                        <textarea name="notes" className="w-full border rounded p-2 h-20" defaultValue={editingContact?.notes}></textarea>
+                                    </div>
+
+                                    <div className="flex justify-between mt-6">
+                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}>Eliminar</Button> : <div></div>}
+                                        <div className="flex gap-2">
+                                            <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
+                                            <Button type="submit">Guardar</Button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
