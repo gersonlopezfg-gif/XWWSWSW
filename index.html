@@ -25,6 +25,7 @@
         .animate-slide-in { animation: slideIn 0.3s ease-out forwards; }
         @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-900">
@@ -36,8 +37,6 @@
         //  CONFIGURACIÓN DE FIREBASE
         // ==========================================
         
-        // 1. Configuración Manual (Para cuando descargues el archivo)
-        // Reemplaza estos valores con los de tu consola de Firebase
         const manualConfig = {
             apiKey: "PON_TU_API_KEY_AQUI",
             authDomain: "tu-proyecto.firebaseapp.com",
@@ -47,48 +46,151 @@
             appId: "1:123456789:web:..."
         };
 
-        // 2. Lógica de Selección de Configuración
-        // Si estamos en el entorno de prueba, usa la config automática.
-        // Si estás en tu PC, usará 'manualConfig'.
         let firebaseConfig = manualConfig;
-        let currentAppId = "mi_crm_personal_v1";
-
         if (typeof __firebase_config !== 'undefined') {
-            try {
-                firebaseConfig = JSON.parse(__firebase_config);
-                if (typeof __app_id !== 'undefined') currentAppId = __app_id;
-            } catch (e) { console.error("Error parsing environment config", e); }
+            try { firebaseConfig = JSON.parse(__firebase_config); } 
+            catch (e) { console.error("Error parsing environment config", e); }
         }
 
         // ==========================================
-        //  INICIALIZACIÓN DE FIREBASE
+        //  MOTOR DE BASE DE DATOS LOCAL (IndexedDB)
+        //  Capacidad masiva (>500MB) sin servidor
         // ==========================================
-        let app, auth, db;
-        let initError = null;
+        const LocalDB = {
+            dbName: 'CRM_B2C_DB',
+            version: 1,
+            db: null,
+            
+            async connect() {
+                if (this.db) return this.db;
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(this.dbName, this.version);
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains('contacts')) {
+                            db.createObjectStore('contacts', { keyPath: 'id' });
+                        }
+                    };
+                    request.onsuccess = (event) => {
+                        this.db = event.target.result;
+                        resolve(this.db);
+                    };
+                    request.onerror = (event) => reject('Error abriendo BD local');
+                });
+            },
 
-        try {
-            if (!firebase.apps.length) {
-                app = firebase.initializeApp(firebaseConfig);
-            } else {
-                app = firebase.app();
+            async getAll() {
+                const db = await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction('contacts', 'readonly');
+                    const store = tx.objectStore('contacts');
+                    const request = store.getAll();
+                    request.onsuccess = () => resolve(request.result || []);
+                    request.onerror = () => reject(request.error);
+                });
+            },
+
+            async save(contact) {
+                const db = await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction('contacts', 'readwrite');
+                    const store = tx.objectStore('contacts');
+                    const request = store.put(contact);
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+            },
+
+            async delete(id) {
+                const db = await this.connect();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction('contacts', 'readwrite');
+                    const store = tx.objectStore('contacts');
+                    const request = store.delete(id);
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                });
             }
-            auth = firebase.auth();
-            db = firebase.firestore();
-            db.enablePersistence().catch(err => console.log("Persistencia offline no disponible:", err.code));
-        } catch (error) {
-            console.error("Error inicializando Firebase:", error);
-            initError = error.message;
-        }
+        };
+
+        // ==========================================
+        //  ADAPTADOR DE ALMACENAMIENTO
+        // ==========================================
+        const StorageAdapter = {
+            mode: 'local',
+            db: null,
+            user: null,
+            appId: 'crm_v1',
+
+            initFirebase: async () => {
+                try {
+                    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                    else firebase.app();
+                    const auth = firebase.auth();
+                    await auth.signInAnonymously();
+                    StorageAdapter.db = firebase.firestore();
+                    StorageAdapter.user = auth.currentUser;
+                    StorageAdapter.mode = 'firebase';
+                    try { StorageAdapter.db.enablePersistence().catch(() => {}); } catch(e){}
+                    return true;
+                } catch (error) {
+                    console.warn("Fallo conexión Firebase, usando Local:", error);
+                    StorageAdapter.mode = 'local';
+                    return false;
+                }
+            },
+
+            subscribeContacts: (callback) => {
+                if (StorageAdapter.mode === 'firebase' && StorageAdapter.user) {
+                    return StorageAdapter.db.collection('artifacts').doc(StorageAdapter.appId)
+                        .collection('users').doc(StorageAdapter.user.uid).collection('contacts')
+                        .onSnapshot(snap => callback(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+                } else {
+                    // Modo Local: Usar IndexedDB
+                    const load = async () => {
+                        try {
+                            const data = await LocalDB.getAll();
+                            callback(data);
+                        } catch (e) { console.error("Error cargando local DB", e); callback([]); }
+                    };
+                    load();
+                    // Escuchar evento personalizado para recargar
+                    window.addEventListener('local_data_change', load);
+                    return () => window.removeEventListener('local_data_change', load);
+                }
+            },
+
+            saveContact: async (contact) => {
+                if (StorageAdapter.mode === 'firebase' && StorageAdapter.user) {
+                    await StorageAdapter.db.collection('artifacts').doc(StorageAdapter.appId)
+                        .collection('users').doc(StorageAdapter.user.uid).collection('contacts')
+                        .doc(contact.id).set(contact, { merge: true });
+                } else {
+                    await LocalDB.save(contact);
+                    window.dispatchEvent(new Event('local_data_change'));
+                }
+            },
+
+            deleteContact: async (id) => {
+                if (StorageAdapter.mode === 'firebase' && StorageAdapter.user) {
+                    await StorageAdapter.db.collection('artifacts').doc(StorageAdapter.appId)
+                        .collection('users').doc(StorageAdapter.user.uid).collection('contacts')
+                        .doc(id).delete();
+                } else {
+                    await LocalDB.delete(id);
+                    window.dispatchEvent(new Event('local_data_change'));
+                }
+            }
+        };
 
         const { useState, useEffect, useRef } = React;
 
-        // --- Componente de Icono ---
+        // --- Componentes UI ---
         const Icon = ({ name, size = 24, className = "" }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
         };
 
-        // --- Componentes UI ---
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-lg shadow-sm border border-gray-200 ${className}`}>{children}</div>;
         
         const Button = ({ children, onClick, variant = "primary", className = "", disabled = false }) => {
@@ -111,118 +213,112 @@
 
         // --- App Principal ---
         function App() {
-            const [user, setUser] = useState(null);
-            const [loading, setLoading] = useState(true);
-            const [authError, setAuthError] = useState(initError);
+            const [status, setStatus] = useState('loading'); // loading, error, ready
+            const [storageMode, setStorageMode] = useState('local');
             const [view, setView] = useState('funnel');
             const [contacts, setContacts] = useState([]);
-            const [stages, setStages] = useState([]);
             const [isModalOpen, setModalOpen] = useState(false);
             const [editingContact, setEditingContact] = useState(null);
             const [searchTerm, setSearchTerm] = useState("");
             
-            const defaultStages = [
-                { id: 's1', name: 'Por Contactar', color: 'bg-gray-100 border-gray-300 text-gray-700', order: 1 },
-                { id: 's2', name: 'Contactado', color: 'bg-blue-50 border-blue-200 text-blue-700', order: 2 },
-                { id: 's3', name: 'Negociación', color: 'bg-yellow-50 border-yellow-200 text-yellow-700', order: 3 },
-                { id: 's4', name: 'Ganado', color: 'bg-green-50 border-green-200 text-green-700', order: 4 },
-                { id: 's5', name: 'Perdido', color: 'bg-red-50 border-red-200 text-red-700', order: 5 }
+            const stages = [
+                { id: 's1', name: 'Por Contactar', color: 'bg-gray-100 border-gray-300 text-gray-700' },
+                { id: 's2', name: 'Contactado', color: 'bg-blue-50 border-blue-200 text-blue-700' },
+                { id: 's3', name: 'Negociación', color: 'bg-yellow-50 border-yellow-200 text-yellow-700' },
+                { id: 's4', name: 'Ganado', color: 'bg-green-50 border-green-200 text-green-700' },
+                { id: 's5', name: 'Perdido', color: 'bg-red-50 border-red-200 text-red-700' }
             ];
 
-            // 1. Autenticación
+            // 1. Inicialización
             useEffect(() => {
-                if (!auth) { setLoading(false); return; }
-                
-                // Intentar login anónimo
-                auth.signInAnonymously().catch(e => {
-                    console.error("Error Auth:", e);
-                    setAuthError(e.message);
-                    setLoading(false);
-                });
-
-                const unsubscribe = auth.onAuthStateChanged(u => {
-                    setUser(u);
-                    if (u) setAuthError(null); // Limpiar error si logramos entrar
-                    setLoading(false);
-                });
-                return unsubscribe;
+                const init = async () => {
+                    const success = await StorageAdapter.initFirebase();
+                    if (success) {
+                        setStorageMode('firebase');
+                        setStatus('ready');
+                    } else {
+                        setStatus('error'); 
+                    }
+                };
+                init();
             }, []);
 
-            // 2. Cargar Datos
+            // 2. Suscripción a Datos
             useEffect(() => {
-                if (!user || !db) return;
-                const userRef = db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid);
-                
-                const unsubStages = userRef.collection('stages').onSnapshot(snap => {
-                    const data = snap.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => a.order - b.order);
-                    if (data.length === 0) {
-                        defaultStages.forEach(s => userRef.collection('stages').doc(s.id).set(s));
-                    } else {
-                        setStages(data);
-                    }
+                if (status !== 'ready') return;
+                const unsub = StorageAdapter.subscribeContacts((data) => {
+                    setContacts(data);
                 });
+                return () => { if (unsub) unsub(); };
+            }, [status]);
 
-                const unsubContacts = userRef.collection('contacts').onSnapshot(snap => {
-                    setContacts(snap.docs.map(d => ({id: d.id, ...d.data()})));
-                });
+            // Actions
+            const startLocalMode = () => {
+                StorageAdapter.mode = 'local';
+                setStorageMode('local');
+                setStatus('ready');
+            };
 
-                return () => { unsubStages(); unsubContacts(); };
-            }, [user]);
-
-            // 3. Guardar Contacto
             const handleSave = async (e) => {
                 e.preventDefault();
-                if(!user) return;
                 const formData = new FormData(e.target);
                 const data = Object.fromEntries(formData.entries());
-                const id = editingContact ? editingContact.id : Date.now().toString();
-                await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
-                    .collection('contacts').doc(id).set({ ...data, stageId: data.stageId || stages[0].id }, { merge: true });
+                const contact = {
+                    id: editingContact ? editingContact.id : Date.now().toString(),
+                    ...data,
+                    stageId: data.stageId || stages[0].id
+                };
+                await StorageAdapter.saveContact(contact);
                 setModalOpen(false);
                 setEditingContact(null);
             };
 
-            // 4. Borrar
             const handleDelete = async (id) => {
                 if(confirm("¿Borrar contacto?")) {
-                    await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
-                        .collection('contacts').doc(id).delete();
+                    await StorageAdapter.deleteContact(id);
                     setModalOpen(false);
                 }
             };
 
-            // 5. Mover Etapa
             const moveStage = async (contact, direction, e) => {
                 e.stopPropagation();
                 const idx = stages.findIndex(s => s.id === contact.stageId);
                 if (idx === -1) return;
                 const newIdx = direction === 'next' ? idx + 1 : idx - 1;
                 if (newIdx >= 0 && newIdx < stages.length) {
-                    await db.collection('artifacts').doc(currentAppId).collection('users').doc(user.uid)
-                        .collection('contacts').doc(contact.id).update({ stageId: stages[newIdx].id });
+                    await StorageAdapter.saveContact({ ...contact, stageId: stages[newIdx].id });
                 }
             };
             
-            // Pantallas de Estado
-            if (loading) return <div className="h-screen flex items-center justify-center text-gray-500">Cargando CRM...</div>;
+            // --- Pantallas de Estado ---
+            if (status === 'loading') return <div className="h-screen flex items-center justify-center text-gray-500 animate-pulse">Conectando CRM...</div>;
 
-            if (authError) return (
-                <div className="h-screen flex flex-col items-center justify-center p-8 bg-red-50 text-center">
-                    <div className="bg-white p-8 rounded-lg shadow-xl max-w-md">
-                        <h1 className="text-2xl font-bold text-red-600 mb-4">Falta Configuración</h1>
-                        <p className="mb-4 text-gray-700">
-                            Para usar este CRM en tu computadora, necesitas conectarlo a tu propia base de datos de Firebase.
-                        </p>
-                        <div className="bg-gray-100 p-4 rounded text-left text-sm font-mono mb-4 overflow-x-auto">
-                            const manualConfig = &#123;<br/>
-                            &nbsp;&nbsp;apiKey: "PON_TU_API_KEY_AQUI",<br/>
-                            &nbsp;&nbsp;...<br/>
-                            &#125;;
+            if (status === 'error') return (
+                <div className="h-screen flex flex-col items-center justify-center p-6 bg-gray-50">
+                    <div className="bg-white p-8 rounded-xl shadow-2xl max-w-md text-center border border-gray-200">
+                        <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Icon name="alert-circle" size={32} />
                         </div>
-                        <p className="text-sm text-gray-500">
-                            Abre este archivo <b>index.html</b> con el Bloc de Notas y reemplaza los valores en <code>manualConfig</code>.
+                        <h1 className="text-2xl font-bold text-gray-800 mb-2">Falta Conexión a la Nube</h1>
+                        <p className="text-gray-600 mb-6">
+                            No hay configuración de Firebase. ¿Deseas usar el almacenamiento local de alta capacidad?
                         </p>
-                        <p className="mt-4 text-xs text-red-400">Error técnico: {authError}</p>
+                        
+                        <div className="space-y-3">
+                            <Button onClick={startLocalMode} className="w-full py-3 bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-200">
+                                <Icon name="hard-drive" size={18} /> Usar Modo Local (IndexedDB)
+                            </Button>
+                            <p className="text-xs text-gray-400 mt-2">
+                                Los datos se guardan en este navegador. Capacidad masiva disponible.
+                            </p>
+                        </div>
+
+                        <div className="mt-8 pt-6 border-t border-gray-100">
+                            <p className="text-sm text-gray-500 mb-2">¿Quieres conectar tu propia base de datos?</p>
+                            <div className="bg-gray-100 p-3 rounded text-left text-xs font-mono text-gray-600 overflow-x-auto">
+                                const manualConfig = &#123; apiKey: "TU_CLAVE" ... &#125;
+                            </div>
+                        </div>
                     </div>
                 </div>
             );
@@ -235,49 +331,61 @@
             return (
                 <div className="flex h-screen overflow-hidden">
                     {/* Sidebar */}
-                    <div className="w-20 md:w-64 bg-slate-900 text-white flex flex-col">
+                    <div className="w-20 md:w-64 bg-slate-900 text-white flex flex-col shadow-xl z-10">
                         <div className="p-6 flex items-center gap-3 border-b border-slate-800">
-                            <div className="bg-blue-500 p-2 rounded"><Icon name="phone" className="text-white" /></div>
-                            <span className="font-bold text-xl hidden md:block">CRM Portable</span>
+                            <div className="bg-blue-500 p-2 rounded shadow-lg shadow-blue-900/50"><Icon name="phone" className="text-white" /></div>
+                            <span className="font-bold text-xl hidden md:block">ColdCRM</span>
                         </div>
-                        <nav className="flex-1 p-2 space-y-2 mt-4">
-                            <button onClick={() => setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded ${view === 'funnel' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}>
-                                <Icon name="layout" /> <span className="hidden md:block">Embudo</span>
+                        <nav className="flex-1 p-3 space-y-2 mt-4">
+                            <button onClick={() => setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'funnel' ? 'bg-blue-600 shadow-md text-white' : 'text-slate-300 hover:bg-slate-800'}`}>
+                                <Icon name="layout" /> <span className="hidden md:block font-medium">Embudo</span>
                             </button>
-                            <button onClick={() => setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded ${view === 'contacts' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}>
-                                <Icon name="users" /> <span className="hidden md:block">Contactos</span>
+                            <button onClick={() => setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'contacts' ? 'bg-blue-600 shadow-md text-white' : 'text-slate-300 hover:bg-slate-800'}`}>
+                                <Icon name="users" /> <span className="hidden md:block font-medium">Contactos</span>
                             </button>
                         </nav>
                         <div className="p-4 border-t border-slate-800 text-xs text-slate-400 hidden md:block">
-                            User: {user?.uid?.slice(0,8)}...
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${storageMode === 'firebase' ? 'bg-green-500' : 'bg-orange-500'}`}></div>
+                                {storageMode === 'firebase' ? 'En línea (Nube)' : 'Local (IndexedDB)'}
+                            </div>
                         </div>
                     </div>
 
                     {/* Main */}
-                    <main className="flex-1 flex flex-col h-screen overflow-hidden">
-                        <header className="h-16 bg-white border-b flex items-center justify-between px-6 flex-shrink-0">
-                            <h1 className="text-xl font-bold">{view === 'funnel' ? 'Embudo de Ventas' : 'Lista de Contactos'}</h1>
+                    <main className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50">
+                        <header className="h-16 bg-white border-b flex items-center justify-between px-6 flex-shrink-0 shadow-sm">
+                            <h1 className="text-xl font-bold text-slate-800">{view === 'funnel' ? 'Embudo de Ventas' : 'Lista de Contactos'}</h1>
                             <Button onClick={() => { setEditingContact(null); setModalOpen(true); }}>
-                                <Icon name="plus" size={16} /> Nuevo
+                                <Icon name="plus" size={16} /> Nuevo Prospecto
                             </Button>
                         </header>
 
                         <div className="flex-1 overflow-auto p-6">
                             {view === 'contacts' && (
-                                <Card className="p-4 h-full flex flex-col">
+                                <Card className="p-4 h-full flex flex-col border-0 shadow-md">
                                     <div className="mb-4 relative">
                                         <Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18} />
-                                        <input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                        <input placeholder="Buscar nombre o teléfono..." className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                                     </div>
                                     <div className="flex-1 overflow-auto">
-                                        {filtered.length === 0 && <div className="text-center text-gray-400 mt-10">No hay contactos aún.</div>}
+                                        {filtered.length === 0 && <div className="text-center text-gray-400 mt-20 flex flex-col items-center gap-2"><Icon name="ghost" size={32} /><span>No hay contactos aún.</span></div>}
                                         {filtered.map(c => (
-                                            <div key={c.id} className="flex justify-between p-3 border-b hover:bg-gray-50 items-center">
-                                                <div>
-                                                    <div className="font-bold">{c.name}</div>
-                                                    <div className="text-sm text-gray-500">{c.phone}</div>
+                                            <div key={c.id} className="flex justify-between p-4 border-b border-gray-100 hover:bg-blue-50/50 items-center transition-colors last:border-0">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm">
+                                                        {c.name.substring(0,2).toUpperCase()}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold text-gray-800">{c.name}</div>
+                                                        <div className="text-sm text-gray-500 flex items-center gap-2">
+                                                            <Icon name="phone" size={12} /> {c.phone}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }}>Editar</Button>
+                                                <Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }} className="text-blue-600">
+                                                    <Icon name="edit-3" size={16} />
+                                                </Button>
                                             </div>
                                         ))}
                                     </div>
@@ -285,23 +393,28 @@
                             )}
 
                             {view === 'funnel' && (
-                                <div className="flex h-full gap-4 overflow-x-auto pb-2">
+                                <div className="flex h-full gap-4 overflow-x-auto pb-4">
                                     {stages.map((stage, idx) => (
                                         <div key={stage.id} className="min-w-[300px] w-[300px] flex flex-col h-full">
-                                            <div className={`p-3 rounded-t font-bold flex justify-between bg-white border-b-4 border-gray-200`}>
+                                            <div className={`p-3 rounded-t-lg font-bold flex justify-between bg-white border-b-4 border-blue-500/20 shadow-sm mb-2`}>
                                                 {stage.name}
-                                                <span className="bg-gray-100 px-2 rounded-full text-xs flex items-center">{contacts.filter(c => c.stageId === stage.id).length}</span>
+                                                <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs flex items-center font-bold">{contacts.filter(c => c.stageId === stage.id).length}</span>
                                             </div>
-                                            <div className="bg-gray-50 flex-1 p-2 overflow-y-auto rounded-b border border-gray-200">
+                                            <div className="bg-slate-100/50 flex-1 p-2 overflow-y-auto rounded-b-lg border border-slate-200/50">
                                                 {contacts.filter(c => c.stageId === stage.id).map(c => (
-                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-3 mb-2 rounded shadow-sm hover:shadow-md cursor-pointer group relative">
-                                                        <div className="font-bold">{c.name}</div>
-                                                        <div className="text-sm text-gray-500">{c.phone}</div>
-                                                        {c.reminder && <div className="text-xs text-orange-600 mt-1 flex gap-1 items-center"><Icon name="clock" size={12}/> {new Date(c.reminder).toLocaleDateString()}</div>}
+                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-4 mb-3 rounded-lg shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-300 cursor-pointer group relative transition-all">
+                                                        <div className="font-bold text-gray-800">{c.name}</div>
+                                                        <div className="text-sm text-gray-500 mb-2">{c.phone}</div>
                                                         
-                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100">
-                                                            {idx > 0 && <button onClick={(e) => moveStage(c, 'prev', e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-left" size={14}/></button>}
-                                                            {idx < stages.length - 1 && <button onClick={(e) => moveStage(c, 'next', e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-right" size={14}/></button>}
+                                                        <div className="flex gap-2 mt-2">
+                                                            {c.segment && <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100 uppercase font-bold tracking-wider">{c.segment}</span>}
+                                                        </div>
+
+                                                        {c.reminder && <div className="text-xs text-orange-600 mt-2 pt-2 border-t border-gray-50 flex gap-1 items-center font-medium"><Icon name="clock" size={12}/> {new Date(c.reminder).toLocaleDateString()} {new Date(c.reminder).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>}
+                                                        
+                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm rounded p-1">
+                                                            {idx > 0 && <button onClick={(e) => moveStage(c, 'prev', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-left" size={16}/></button>}
+                                                            {idx < stages.length - 1 && <button onClick={(e) => moveStage(c, 'next', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-right" size={16}/></button>}
                                                         </div>
                                                     </div>
                                                 ))}
@@ -315,38 +428,51 @@
 
                     {/* Modal */}
                     {isModalOpen && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scale-100 animate-in zoom-in-95 duration-200">
                                 <form onSubmit={handleSave} className="p-6">
-                                    <h2 className="text-xl font-bold mb-4">{editingContact ? 'Editar' : 'Nuevo'} Contacto</h2>
+                                    <div className="flex justify-between items-center mb-6 pb-4 border-b">
+                                        <h2 className="text-xl font-bold text-gray-800">{editingContact ? 'Editar Contacto' : 'Nuevo Prospecto'}</h2>
+                                        <button type="button" onClick={() => setModalOpen(false)} className="text-gray-400 hover:text-gray-600"><Icon name="x" size={24} /></button>
+                                    </div>
                                     
-                                    <label className="block text-sm font-medium mb-2">Etapa</label>
-                                    <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
-                                        {stages.map(s => (
-                                            <label key={s.id} className={`px-3 py-1 rounded-full border text-sm cursor-pointer whitespace-nowrap ${ (editingContact?.stageId || stages[0].id) === s.id ? 'bg-blue-600 text-white' : ''}`}>
-                                                <input type="radio" name="stageId" value={s.id} defaultChecked={(editingContact?.stageId || stages[0].id) === s.id} className="hidden" />
-                                                {s.name}
-                                            </label>
-                                        ))}
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Etapa del Proceso</label>
+                                            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                                                {stages.map(s => (
+                                                    <label key={s.id} className={`px-3 py-1.5 rounded-full border text-sm cursor-pointer whitespace-nowrap transition-all ${ (editingContact?.stageId || stages[0].id) === s.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                                                        <input type="radio" name="stageId" value={s.id} defaultChecked={(editingContact?.stageId || stages[0].id) === s.id} className="hidden" />
+                                                        {s.name}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <Input name="name" label="Nombre Completo" defaultValue={editingContact?.name} required placeholder="Ej: Roberto Gómez" />
+                                            <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required placeholder="+505 ..." />
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <Input name="cedula" label="Cédula / ID" defaultValue={editingContact?.cedula} />
+                                            <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} placeholder="Ej: PYME" />
+                                        </div>
+
+                                        <Input name="department" label="Departamento / Ciudad" defaultValue={editingContact?.department} />
+                                        <Input name="reminder" type="datetime-local" label="Recordatorio de llamada" defaultValue={editingContact?.reminder} />
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Notas / Bitácora</label>
+                                            <textarea name="notes" className="w-full border border-gray-300 rounded-lg p-3 h-24 focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="Detalles de la conversación..." defaultValue={editingContact?.notes}></textarea>
+                                        </div>
                                     </div>
 
-                                    <Input name="name" label="Nombre" defaultValue={editingContact?.name} required />
-                                    <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required />
-                                    <Input name="cedula" label="Cédula" defaultValue={editingContact?.cedula} />
-                                    <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} />
-                                    <Input name="department" label="Departamento" defaultValue={editingContact?.department} />
-                                    <Input name="reminder" type="datetime-local" label="Recordatorio" defaultValue={editingContact?.reminder} />
-                                    
-                                    <div className="mb-4">
-                                        <label className="block text-sm font-medium mb-1">Notas</label>
-                                        <textarea name="notes" className="w-full border rounded p-2 h-20" defaultValue={editingContact?.notes}></textarea>
-                                    </div>
-
-                                    <div className="flex justify-between mt-6">
-                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}>Eliminar</Button> : <div></div>}
-                                        <div className="flex gap-2">
+                                    <div className="flex justify-between mt-8 pt-4 border-t">
+                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}><Icon name="trash-2" size={16}/> Eliminar</Button> : <div></div>}
+                                        <div className="flex gap-3">
                                             <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-                                            <Button type="submit">Guardar</Button>
+                                            <Button type="submit"><Icon name="save" size={16}/> Guardar</Button>
                                         </div>
                                     </div>
                                 </form>
