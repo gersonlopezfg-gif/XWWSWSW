@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CRM Local V6 - Excel Power</title>
+    <title>CRM Local V6.3 - Tareas y Recordatorios</title>
     
     <!-- LIBRERÍAS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -11,8 +11,6 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    
-    <!-- LIBRERÍA PARA EXCEL (SheetJS) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
 
     <style>
@@ -101,7 +99,7 @@
             }
         };
 
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         // --- Componentes UI ---
         const Icon = ({ name, size = 24, className = "" }) => {
@@ -129,72 +127,59 @@
             </div>
         );
 
+        // --- Notificaciones Toast ---
+        const NotificationToast = ({ notifications, removeNotification }) => (
+            <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+                {notifications.map(notif => (
+                    <div key={notif.id} className="bg-white border-l-4 border-blue-500 shadow-xl rounded-r-md p-4 flex items-start gap-3 w-80 animate-slide-in pointer-events-auto">
+                        <div className="text-blue-500 mt-1"><Icon name="bell" size={20} /></div>
+                        <div className="flex-1">
+                            <h4 className="font-bold text-gray-800 text-sm">{notif.title}</h4>
+                            <p className="text-sm text-gray-600">{notif.message}</p>
+                            <p className="text-xs text-gray-400 mt-1">{notif.time}</p>
+                        </div>
+                        <button onClick={() => removeNotification(notif.id)} className="text-gray-400 hover:text-gray-600"><Icon name="x" size={16} /></button>
+                    </div>
+                ))}
+            </div>
+        );
+
         // --- Modal de Mapeo de Importación ---
         const ImportMapperModal = ({ headers, sampleRow, onCancel, onFinish }) => {
             const [mapping, setMapping] = useState({});
-
             const crmFields = [
                 { key: 'name', label: 'Nombre Completo', required: true },
-                { key: 'phone', label: 'Teléfono / Celular', required: true },
+                { key: 'phone', label: 'Teléfono', required: true },
                 { key: 'cedula', label: 'Cédula / ID' },
                 { key: 'segment', label: 'Segmento' },
                 { key: 'department', label: 'Departamento' },
-                { key: 'stage', label: 'Etapa (Texto exacto)' },
+                { key: 'stage', label: 'Etapa' },
                 { key: 'notes', label: 'Nota Inicial' },
-                { key: 'reminder', label: 'Fecha Recordatorio' },
+                { key: 'reminder', label: 'Recordatorio' },
             ];
-
-            const handleSelectChange = (crmKey, csvIndex) => {
-                setMapping(prev => ({ ...prev, [crmKey]: parseInt(csvIndex) }));
-            };
-
+            const handleSelectChange = (crmKey, csvIndex) => setMapping(prev => ({ ...prev, [crmKey]: parseInt(csvIndex) }));
             const handleImport = () => {
-                if (mapping['name'] === undefined || mapping['name'] === -1) {
-                    alert("Debes asignar al menos la columna de 'Nombre'.");
-                    return;
-                }
+                if (mapping['name'] === undefined || mapping['name'] === -1) return alert("Asigna al menos el Nombre.");
                 onFinish(mapping);
             };
-
             return (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
                     <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
                         <div className="p-6 border-b flex justify-between items-center">
-                            <div>
-                                <h2 className="text-xl font-bold text-gray-800">Asignar Columnas Excel</h2>
-                                <p className="text-sm text-gray-500">Relaciona las columnas de tu Excel con el CRM.</p>
-                            </div>
-                            <button onClick={onCancel}><Icon name="x" size={24} className="text-gray-400"/></button>
+                            <h2 className="text-xl font-bold text-gray-800">Asignar Columnas</h2>
+                            <button onClick={onCancel}><Icon name="x" className="text-gray-400"/></button>
                         </div>
-                        
                         <div className="p-6 overflow-y-auto flex-1">
-                            <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b">
-                                        <th className="pb-2 text-sm font-bold text-gray-600 w-1/3">Campo CRM</th>
-                                        <th className="pb-2 text-sm font-bold text-gray-600">Columna Excel (Ejemplo)</th>
-                                    </tr>
-                                </thead>
+                            <table className="w-full text-left">
+                                <thead><tr className="border-b"><th className="pb-2">Campo CRM</th><th className="pb-2">Tu Archivo</th></tr></thead>
                                 <tbody className="divide-y">
-                                    {crmFields.map(field => (
-                                        <tr key={field.key}>
-                                            <td className="py-4 pr-4">
-                                                <label className="block text-sm font-medium text-gray-800">
-                                                    {field.label} {field.required && <span className="text-red-500">*</span>}
-                                                </label>
-                                            </td>
-                                            <td className="py-4">
-                                                <select 
-                                                    className="w-full border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                                                    onChange={(e) => handleSelectChange(field.key, e.target.value)}
-                                                    value={mapping[field.key] !== undefined ? mapping[field.key] : -1}
-                                                >
-                                                    <option value={-1}>-- Ignorar / No Importar --</option>
-                                                    {headers.map((h, idx) => (
-                                                        <option key={idx} value={idx}>
-                                                            {h} {sampleRow && sampleRow[idx] ? `(Ej: ${String(sampleRow[idx]).substring(0, 15)}...)` : ''}
-                                                        </option>
-                                                    ))}
+                                    {crmFields.map(f => (
+                                        <tr key={f.key}>
+                                            <td className="py-3 pr-4 text-sm font-medium">{f.label} {f.required&&'*'}</td>
+                                            <td className="py-3">
+                                                <select className="w-full border rounded p-2 text-sm" onChange={(e) => handleSelectChange(f.key, e.target.value)} value={mapping[f.key]||-1}>
+                                                    <option value={-1}>-- Ignorar --</option>
+                                                    {headers.map((h, i) => <option key={i} value={i}>{h} {sampleRow[i] ? `(${String(sampleRow[i]).substring(0,10)}...)` : ''}</option>)}
                                                 </select>
                                             </td>
                                         </tr>
@@ -202,10 +187,9 @@
                                 </tbody>
                             </table>
                         </div>
-
-                        <div className="p-6 border-t bg-gray-50 rounded-b-xl flex justify-end gap-3">
+                        <div className="p-6 border-t bg-gray-50 flex justify-end gap-3">
                             <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-                            <Button onClick={handleImport}><Icon name="check" size={16}/> Importar Datos</Button>
+                            <Button onClick={handleImport}>Importar</Button>
                         </div>
                     </div>
                 </div>
@@ -214,34 +198,92 @@
 
         // --- Modal de Exportación ---
         const ExportModal = ({ onClose, onExport }) => {
-            const [columns, setColumns] = useState({
-                id: false, name: true, phone: true, cedula: true,
-                segment: true, department: true, stage: true,
-                notes: true, reminder: true
-            });
-
-            const labels = {
-                id: "ID Sistema", name: "Nombre", phone: "Teléfono", cedula: "Cédula",
-                segment: "Segmento", department: "Departamento", stage: "Etapa",
-                notes: "Historial Notas", reminder: "Recordatorio"
-            };
-
+            const [columns, setColumns] = useState({id:false,name:true,phone:true,cedula:true,segment:true,department:true,stage:true,notes:true,reminder:true});
+            const labels = {id:"ID",name:"Nombre",phone:"Teléfono",cedula:"Cédula",segment:"Segmento",department:"Depto",stage:"Etapa",notes:"Notas",reminder:"Recordatorio"};
             return (
                 <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
                     <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-                        <h2 className="text-xl font-bold text-gray-800 mb-4">Exportar Datos</h2>
+                        <h2 className="text-xl font-bold mb-4">Exportar</h2>
                         <div className="grid grid-cols-2 gap-3 mb-6">
-                            {Object.keys(columns).map(key => (
-                                <label key={key} className="flex items-center gap-2 cursor-pointer p-2 border rounded hover:bg-gray-50">
-                                    <input type="checkbox" checked={columns[key]} onChange={() => setColumns({...columns, [key]: !columns[key]})} className="custom-checkbox"/>
-                                    <span className="text-sm text-gray-700">{labels[key]}</span>
+                            {Object.keys(columns).map(k => (
+                                <label key={k} className="flex items-center gap-2 cursor-pointer p-2 border rounded hover:bg-gray-50">
+                                    <input type="checkbox" checked={columns[k]} onChange={() => setColumns({...columns, [k]:!columns[k]})} className="custom-checkbox"/>
+                                    <span className="text-sm">{labels[k]}</span>
                                 </label>
                             ))}
                         </div>
                         <div className="flex justify-end gap-2">
                             <Button variant="secondary" onClick={onClose}>Cancelar</Button>
-                            <Button onClick={() => onExport(Object.keys(columns).filter(k => columns[k]))}><Icon name="download" size={16}/> Descargar</Button>
+                            <Button onClick={() => onExport(Object.keys(columns).filter(k => columns[k]))}>Descargar</Button>
                         </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Modal de Contacto (Bitácora) ---
+        const ContactModal = ({ contact, stages, isOpen, onClose, onSave, onDelete }) => {
+            if (!isOpen) return null;
+            const [notes, setNotes] = useState(contact?.notes || []);
+            const [newNoteText, setNewNoteText] = useState("");
+            const defaultValues = contact || { name: '', phone: '', cedula: '', segment: '', department: '', stageId: stages[0]?.id, reminder: '' };
+
+            const handleAddNote = () => {
+                if (!newNoteText.trim()) return;
+                setNotes([{ id: Date.now(), text: newNoteText, date: new Date().toISOString() }, ...notes]);
+                setNewNoteText("");
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target);
+                onSave({ ...Object.fromEntries(fd.entries()), notes });
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+                        <form onSubmit={handleSubmit} className="flex flex-col h-full">
+                            <div className="flex justify-between items-center p-6 border-b bg-slate-50">
+                                <h2 className="text-xl font-bold text-gray-800">{contact ? 'Editar' : 'Nuevo'}</h2>
+                                <button type="button" onClick={onClose}><Icon name="x" className="text-gray-400"/></button>
+                            </div>
+                            <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+                                <div className="w-full md:w-1/2 p-6 overflow-y-auto border-r">
+                                    <div className="space-y-4">
+                                        <div><label className="text-xs font-bold text-gray-500 uppercase">Etapa</label><select name="stageId" defaultValue={defaultValues.stageId} className="w-full border p-2 rounded mt-1">{stages.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+                                        <Input name="name" label="Nombre" defaultValue={defaultValues.name} required />
+                                        <Input name="phone" label="Teléfono" defaultValue={defaultValues.phone} required />
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <Input name="cedula" label="Cédula" defaultValue={defaultValues.cedula} />
+                                            <Input name="segment" label="Segmento" defaultValue={defaultValues.segment} />
+                                        </div>
+                                        <Input name="department" label="Depto" defaultValue={defaultValues.department} />
+                                        <Input name="reminder" type="datetime-local" label="Recordatorio" defaultValue={defaultValues.reminder} />
+                                    </div>
+                                </div>
+                                <div className="w-full md:w-1/2 p-6 bg-slate-50 flex flex-col">
+                                    <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2"><Icon name="list" size={16}/> Bitácora</h3>
+                                    <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-2 max-h-[300px]">
+                                        {notes.length===0 && <div className="text-center text-gray-400 text-xs mt-10">Sin notas.</div>}
+                                        {notes.map(n => (
+                                            <div key={n.id} className="bg-white p-3 rounded border shadow-sm text-sm">
+                                                <p className="text-gray-800 whitespace-pre-wrap">{n.text}</p>
+                                                <div className="mt-2 text-xs text-gray-400 text-right">{new Date(n.date).toLocaleString()}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-auto bg-white p-2 rounded border shadow-sm">
+                                        <textarea className="w-full p-2 text-sm outline-none resize-none h-20" placeholder="Nueva nota..." value={newNoteText} onChange={e=>setNewNoteText(e.target.value)}></textarea>
+                                        <div className="flex justify-end mt-2"><button type="button" onClick={handleAddNote} className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded">Agregar</button></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="p-6 border-t flex justify-between bg-slate-50">
+                                {contact ? <Button variant="danger" onClick={()=>onDelete(contact.id)}>Eliminar</Button> : <div></div>}
+                                <div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit">Guardar</Button></div>
+                            </div>
+                        </form>
                     </div>
                 </div>
             );
@@ -253,17 +295,23 @@
             const [view, setView] = useState('funnel');
             const [contacts, setContacts] = useState([]);
             const [stages, setStages] = useState([]);
+            
+            // UI States
             const [isModalOpen, setModalOpen] = useState(false);
             const [editingContact, setEditingContact] = useState(null);
             const [searchTerm, setSearchTerm] = useState("");
+            const [currentPage, setCurrentPage] = useState(1);
+            const itemsPerPage = 50;
             
-            // Estados para Import/Export
+            // Import/Export/Bulk
             const [isExportModalOpen, setExportModalOpen] = useState(false);
             const [importState, setImportState] = useState({ open: false, headers: [], rows: [] });
+            const [selectedIds, setSelectedIds] = useState(new Set());
             const fileInputRef = useRef(null);
 
-            // Selección Masiva
-            const [selectedIds, setSelectedIds] = useState(new Set());
+            // Notificaciones
+            const [activeNotifications, setActiveNotifications] = useState([]);
+            const [notifiedTracker, setNotifiedTracker] = useState(new Set());
 
             const defaultStages = [
                 { id: 's1', name: 'Por Contactar', order: 1 },
@@ -274,283 +322,237 @@
             ];
 
             useEffect(() => {
-                const loadData = async () => {
+                const load = async () => {
                     try {
                         await LocalDB.connect();
-                        let loadedContacts = await LocalDB.getAll('contacts');
-                        // Asegurar que notas sea array
-                        loadedContacts = loadedContacts.map(c => ({
-                            ...c,
-                            notes: Array.isArray(c.notes) ? c.notes : (c.notes ? [{id: Date.now(), text: c.notes, date: new Date().toISOString()}] : [])
-                        }));
-                        setContacts(loadedContacts);
-
-                        let loadedStages = await LocalDB.getAll('stages');
-                        if (loadedStages.length === 0) {
-                            await LocalDB.saveBulk('stages', defaultStages);
-                            loadedStages = defaultStages;
-                        }
-                        setStages(loadedStages.sort((a,b) => (a.order || 0) - (b.order || 0)));
+                        let cs = await LocalDB.getAll('contacts');
+                        cs = cs.map(c => ({...c, notes: Array.isArray(c.notes) ? c.notes : (c.notes ? [{id:Date.now(), text:c.notes, date:new Date().toISOString()}] : [])}));
+                        setContacts(cs);
+                        let st = await LocalDB.getAll('stages');
+                        if(st.length===0) { await LocalDB.saveBulk('stages', defaultStages); st = defaultStages; }
+                        setStages(st.sort((a,b)=>(a.order||0)-(b.order||0)));
                         setStatus('ready');
-                    } catch (e) { console.error(e); setStatus('error'); }
+                    } catch(e){ console.error(e); setStatus('error'); }
                 };
-                loadData();
+                load();
+                if("Notification" in window && Notification.permission !== "granted") Notification.requestPermission();
             }, []);
 
-            // --- Selección Masiva ---
-            const handleSelectAll = (e) => {
-                if (e.target.checked) setSelectedIds(new Set(filteredContacts.map(c => c.id)));
-                else setSelectedIds(new Set());
-            };
-
-            const handleSelectRow = (id) => {
-                const newSet = new Set(selectedIds);
-                newSet.has(id) ? newSet.delete(id) : newSet.add(id);
-                setSelectedIds(newSet);
-            };
-
-            const handleBulkDelete = async () => {
-                if (confirm(`¿Eliminar ${selectedIds.size} contactos?`)) {
-                    await LocalDB.deleteBulk('contacts', Array.from(selectedIds));
-                    setContacts(prev => prev.filter(c => !selectedIds.has(c.id)));
-                    setSelectedIds(new Set());
-                }
-            };
-
-            // --- CRUD ---
-            const handleSave = async (contactData) => {
-                const contact = {
-                    id: editingContact ? editingContact.id : Date.now().toString(),
-                    ...contactData,
-                    stageId: contactData.stageId || stages[0].id,
-                    notes: contactData.notes || []
-                };
-                await LocalDB.save('contacts', contact);
-                setContacts(prev => {
-                    const idx = prev.findIndex(c => c.id === contact.id);
-                    if (idx >= 0) { const n = [...prev]; n[idx] = contact; return n; }
-                    return [...prev, contact];
-                });
-                setModalOpen(false);
-                setEditingContact(null);
-            };
-
-            const handleDelete = async (id) => {
-                if(confirm("¿Borrar contacto?")) {
-                    await LocalDB.delete('contacts', id);
-                    setContacts(prev => prev.filter(c => c.id !== id));
-                    setModalOpen(false);
-                }
-            };
-
-            const moveStage = async (contact, direction, e) => {
-                e.stopPropagation();
-                const idx = stages.findIndex(s => s.id === contact.stageId);
-                if (idx === -1) return;
-                const newIdx = direction === 'next' ? idx + 1 : idx - 1;
-                if (newIdx >= 0 && newIdx < stages.length) {
-                    const updated = { ...contact, stageId: stages[newIdx].id };
-                    await LocalDB.save('contacts', updated);
-                    setContacts(prev => prev.map(c => c.id === contact.id ? updated : c));
-                }
-            };
-
-            // --- Importación / Exportación ---
-            const performExport = (columns) => {
-                // Usamos SheetJS para exportar a XLSX
-                const data = contacts.map(c => {
-                    const row = {};
-                    columns.forEach(key => {
-                        let val = c[key] || '';
-                        if (key === 'stage') val = stages.find(s => s.id === c.stageId)?.name || '';
-                        if (key === 'notes' && Array.isArray(val)) val = val.map(n => n.text).join(' | ');
-                        row[key.toUpperCase()] = val;
+            // --- Sistema de Recordatorios ---
+            useEffect(() => {
+                if(status !== 'ready') return;
+                const interval = setInterval(() => {
+                    const now = new Date();
+                    contacts.forEach(c => {
+                        if(!c.reminder) return;
+                        const remDate = new Date(c.reminder);
+                        const diff = (remDate - now) / 1000 / 60;
+                        // Notificar 15 min antes y al momento
+                        if(diff >= 14 && diff <= 16) notify(c, 'soon');
+                        if(diff >= -1 && diff <= 1) notify(c, 'now');
                     });
-                    return row;
+                }, 30000);
+                return () => clearInterval(interval);
+            }, [contacts, status]);
+
+            const notify = (c, type) => {
+                const id = `${c.id}-${type}`;
+                if(notifiedTracker.has(id)) return;
+                const msg = type==='soon' ? `⏰ En 15 min: ${c.name}` : `🚨 AHORA: ${c.name}`;
+                setActiveNotifications(p => [...p, {id:Date.now(), title:"Recordatorio", message:msg, time:new Date().toLocaleTimeString()}]);
+                if("Notification" in window && Notification.permission==="granted") new Notification("CRM Alerta", {body:msg});
+                setNotifiedTracker(p => new Set(p).add(id));
+            };
+
+            // --- CRUD y Bulk ---
+            const handleSave = async (d) => {
+                const c = { id: editingContact?.id || Date.now().toString(), ...d, stageId: d.stageId || stages[0].id, notes: d.notes || [] };
+                await LocalDB.save('contacts', c);
+                setContacts(p => { const i = p.findIndex(x=>x.id===c.id); if(i>=0){const n=[...p];n[i]=c;return n;} return [...p,c]; });
+                setModalOpen(false); setEditingContact(null);
+            };
+            const handleDelete = async (id) => { if(confirm("¿Borrar?")) { await LocalDB.delete('contacts', id); setContacts(p=>p.filter(c=>c.id!==id)); setModalOpen(false); } };
+            const handleBulkDelete = async () => { if(confirm(`¿Borrar ${selectedIds.size}?`)) { await LocalDB.deleteBulk('contacts', Array.from(selectedIds)); setContacts(p=>p.filter(c=>!selectedIds.has(c.id))); setSelectedIds(new Set()); } };
+            const moveStage = async (c, dir, e) => {
+                e.stopPropagation();
+                const idx = stages.findIndex(s=>s.id===c.stageId);
+                if(idx===-1) return;
+                const newIdx = dir==='next' ? idx+1 : idx-1;
+                if(newIdx>=0 && newIdx<stages.length) {
+                    const u = {...c, stageId: stages[newIdx].id};
+                    await LocalDB.save('contacts', u);
+                    setContacts(p=>p.map(x=>x.id===c.id?u:x));
+                }
+            };
+
+            // --- Import/Export ---
+            const performExport = (cols) => {
+                const d = contacts.map(c => {
+                    const r = {};
+                    cols.forEach(k => {
+                        let v = c[k]||'';
+                        if(k==='stage') v=stages.find(s=>s.id===c.stageId)?.name||'';
+                        if(k==='notes'&&Array.isArray(v)) v=v.map(n=>n.text).join('|');
+                        r[k.toUpperCase()]=v;
+                    });
+                    return r;
                 });
-
-                const ws = XLSX.utils.json_to_sheet(data);
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Contactos");
-                XLSX.writeFile(wb, `crm_export_${new Date().toISOString().slice(0,10)}.xlsx`);
-                setExportModalOpen(false);
+                const ws=XLSX.utils.json_to_sheet(d); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Data");
+                XLSX.writeFile(wb, `crm_export.xlsx`); setExportModalOpen(false);
             };
-
-            const handleFileSelect = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                
-                const reader = new FileReader();
-                reader.onload = (evt) => {
+            const handleFile = (e) => {
+                const f=e.target.files[0]; if(!f)return;
+                const r=new FileReader(); r.onload=(ev)=>{
                     try {
-                        const data = new Uint8Array(evt.target.result);
-                        const workbook = XLSX.read(data, { type: 'array' });
-                        const firstSheetName = workbook.SheetNames[0];
-                        const worksheet = workbook.Sheets[firstSheetName];
-                        
-                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-                        
-                        if (jsonData.length < 2) {
-                            alert("El archivo parece estar vacío o no tiene cabeceras.");
-                            return;
-                        }
-
-                        const headers = jsonData[0].map(h => String(h).trim());
-                        const rows = jsonData.slice(1); 
-
-                        setImportState({ open: true, headers, rows });
-                    } catch (error) {
-                        console.error("Error leyendo archivo:", error);
-                        alert("Error al leer el archivo. Asegúrate de que sea un Excel (.xlsx, .xls) o CSV válido.");
-                    }
-                    e.target.value = '';
-                };
-                reader.readAsArrayBuffer(file);
+                        const wb=XLSX.read(new Uint8Array(ev.target.result), {type:'array'});
+                        const json=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:""});
+                        if(json.length<2) return alert("Vacío");
+                        setImportState({open:true, headers:json[0].map(h=>String(h).trim()), rows:json.slice(1)});
+                    } catch(err){alert("Error");}
+                    e.target.value='';
+                }; r.readAsArrayBuffer(f);
             };
-
-            const executeImport = async (mapping) => {
-                let count = 0;
-                for (const row of importState.rows) {
-                    if (!row || row.length === 0) continue;
-                    
-                    const getValue = (key) => {
-                        const idx = mapping[key];
-                        if (idx !== undefined && idx !== -1 && row[idx] !== undefined) {
-                            return String(row[idx]).trim();
-                        }
-                        return '';
-                    };
-
-                    let stageId = stages[0].id;
-                    const mapStageName = getValue('stage');
-                    if (mapStageName) {
-                        const found = stages.find(s => s.name.toLowerCase() === mapStageName.toLowerCase());
-                        if (found) stageId = found.id;
-                    }
-
-                    const newC = {
-                        id: Date.now().toString() + Math.random().toString().slice(2,5),
-                        name: getValue('name') || 'Desconocido',
-                        phone: getValue('phone'),
-                        cedula: getValue('cedula'),
-                        segment: getValue('segment'),
-                        department: getValue('department'),
-                        stageId: stageId,
-                        notes: getValue('notes') ? [{id: Date.now(), text: getValue('notes'), date: new Date().toISOString()}] : [],
-                        reminder: getValue('reminder')
-                    };
-                    await LocalDB.save('contacts', newC);
+            const execImport = async (map) => {
+                let count=0, newC=[];
+                for(const r of importState.rows) {
+                    if(!r||r.length===0) continue;
+                    const get=(k)=>(map[k]!==undefined&&map[k]!==-1&&r[map[k]]!==undefined)?String(r[map[k]]).trim():'';
+                    let sId=stages[0].id, sName=get('stage');
+                    if(sName) { const f=stages.find(s=>s.name.toLowerCase()===sName.toLowerCase()); if(f)sId=f.id; }
+                    newC.push({
+                        id:Date.now().toString()+Math.random().toString().slice(2,5)+count,
+                        name:get('name')||'Desconocido', phone:get('phone'), cedula:get('cedula'),
+                        segment:get('segment'), department:get('department'), stageId:sId,
+                        notes:get('notes')?[{id:Date.now(), text:get('notes'), date:new Date().toISOString()}]:[],
+                        reminder:get('reminder')
+                    });
                     count++;
                 }
-                const all = await LocalDB.getAll('contacts');
-                setContacts(all);
-                setImportState({ open: false, headers: [], rows: [] });
-                alert(`Importación finalizada: ${count} contactos agregados.`);
+                if(newC.length>0) { await LocalDB.saveBulk('contacts', newC); setContacts(await LocalDB.getAll('contacts')); }
+                setImportState({open:false, headers:[], rows:[]}); alert(`Importados ${count}`);
             };
 
-            // --- Render ---
-            if (status === 'loading') return <div className="h-screen flex items-center justify-center animate-pulse text-gray-500">Cargando...</div>;
-            
-            // FIX: Safe filtering
-            const filteredContacts = contacts.filter(c => {
-                const n = c.name || "";
-                const p = c.phone || "";
+            if(status==='loading') return <div className="h-screen flex items-center justify-center animate-pulse text-gray-500">Cargando...</div>;
+
+            const filtered = contacts.filter(c => {
+                const n=c.name||"", p=c.phone||"";
                 return n.toLowerCase().includes(searchTerm.toLowerCase()) || p.includes(searchTerm);
             });
+            const paginated = filtered.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
+            const totalPages = Math.ceil(filtered.length/itemsPerPage);
 
             return (
                 <div className="flex h-screen overflow-hidden">
+                    <NotificationToast notifications={activeNotifications} removeNotification={id=>setActiveNotifications(p=>p.filter(n=>n.id!==id))} />
                     
                     {/* Sidebar */}
                     <div className="w-20 md:w-64 bg-slate-900 text-white flex flex-col shadow-xl z-10">
                         <div className="p-6 flex items-center gap-3 border-b border-slate-800">
                             <div className="bg-blue-500 p-2 rounded shadow-lg"><Icon name="database" className="text-white" /></div>
-                            <span className="font-bold text-xl hidden md:block">ColdCRM V6</span>
+                            <span className="font-bold text-xl hidden md:block">ColdCRM V6.3</span>
                         </div>
                         <nav className="flex-1 p-3 space-y-2 mt-4">
-                            <button onClick={() => setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'funnel' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="layout" /> <span className="hidden md:block font-medium">Embudo</span></button>
-                            <button onClick={() => setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'contacts' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="users" /> <span className="hidden md:block font-medium">Contactos</span></button>
-                            <button onClick={() => setView('settings')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view === 'settings' ? 'bg-blue-600 shadow text-white' : 'text-slate-300 hover:bg-slate-800'}`}><Icon name="settings" /> <span className="hidden md:block font-medium">Configurar</span></button>
+                            <button onClick={()=>setView('funnel')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view==='funnel'?'bg-blue-600 shadow text-white':'text-slate-300 hover:bg-slate-800'}`}><Icon name="layout"/><span className="hidden md:block">Embudo</span></button>
+                            <button onClick={()=>setView('contacts')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view==='contacts'?'bg-blue-600 shadow text-white':'text-slate-300 hover:bg-slate-800'}`}><Icon name="users"/><span className="hidden md:block">Contactos</span></button>
+                            <button onClick={()=>setView('reminders')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view==='reminders'?'bg-blue-600 shadow text-white':'text-slate-300 hover:bg-slate-800'}`}>
+                                <div className="relative"><Icon name="calendar"/><span className="absolute -top-1 -right-1 flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span></span></div>
+                                <span className="hidden md:block">Tareas</span>
+                            </button>
+                            <button onClick={()=>setView('settings')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${view==='settings'?'bg-blue-600 shadow text-white':'text-slate-300 hover:bg-slate-800'}`}><Icon name="settings"/><span className="hidden md:block">Configurar</span></button>
                         </nav>
                     </div>
 
                     {/* Main */}
                     <main className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50">
                         <header className="h-16 bg-white border-b flex items-center justify-between px-6 flex-shrink-0 shadow-sm">
-                            <h1 className="text-xl font-bold text-slate-800 capitalize">
-                                {view === 'contacts' ? `Directorio (${contacts.length})` : view}
-                            </h1>
+                            <h1 className="text-xl font-bold text-slate-800 capitalize">{view==='contacts' ? `Directorio (${filtered.length})` : view==='reminders' ? 'Centro de Tareas' : view}</h1>
                             <div className="flex gap-2">
-                                {view === 'contacts' && (
-                                    <>
-                                        <Button variant="secondary" onClick={() => fileInputRef.current.click()}><Icon name="upload" size={16} /> <span className="hidden md:inline">Importar Excel</span></Button>
-                                        <Button variant="secondary" onClick={() => setExportModalOpen(true)}><Icon name="download" size={16} /> <span className="hidden md:inline">Exportar</span></Button>
-                                        <input type="file" ref={fileInputRef} className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileSelect} />
-                                    </>
-                                )}
-                                <Button onClick={() => { setEditingContact(null); setModalOpen(true); }}><Icon name="plus" size={16} /> <span className="hidden md:inline">Nuevo</span></Button>
+                                {view==='contacts' && <><Button variant="secondary" onClick={()=>fileInputRef.current.click()}><Icon name="upload" size={16}/> Importar</Button><Button variant="secondary" onClick={()=>setExportModalOpen(true)}><Icon name="download" size={16}/> Exportar</Button><input type="file" ref={fileInputRef} className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFile}/></>}
+                                <Button onClick={()=>{setEditingContact(null); setModalOpen(true)}}><Icon name="plus" size={16}/> Nuevo</Button>
                             </div>
                         </header>
 
                         <div className="flex-1 overflow-auto p-6">
-                            
+                            {/* VISTA TAREAS (RECORDATORIOS) */}
+                            {view === 'reminders' && (
+                                <div className="max-w-4xl mx-auto">
+                                    <div className="grid gap-4">
+                                        {contacts.filter(c=>c.reminder).sort((a,b)=>new Date(a.reminder)-new Date(b.reminder)).map(c => {
+                                            const d = new Date(c.reminder);
+                                            const isPast = d < new Date();
+                                            const isToday = d.toDateString() === new Date().toDateString();
+                                            return (
+                                                <Card key={c.id} className={`p-4 flex items-center justify-between border-l-4 ${isPast?'border-l-red-500 bg-red-50':isToday?'border-l-orange-500 bg-orange-50':'border-l-blue-500'}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`p-3 rounded-full ${isPast?'bg-red-100 text-red-600':isToday?'bg-orange-100 text-orange-600':'bg-blue-100 text-blue-600'}`}><Icon name={isPast?"alert-circle":"calendar"} size={24}/></div>
+                                                        <div>
+                                                            <h3 className="font-bold text-gray-800 text-lg">{c.name}</h3>
+                                                            <div className="text-sm text-gray-600 flex items-center gap-2"><Icon name="phone" size={12}/> {c.phone}</div>
+                                                            <div className="text-xs text-gray-500 mt-1 italic">{c.notes && c.notes.length>0 ? c.notes[0].text.substring(0,50)+'...' : 'Sin notas previas'}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className={`text-sm font-bold mb-2 ${isPast?'text-red-600':isToday?'text-orange-600':'text-blue-600'}`}>{d.toLocaleString()}</div>
+                                                        <Button variant="secondary" onClick={()=>{setEditingContact(c); setModalOpen(true)}}>Gestionar</Button>
+                                                    </div>
+                                                </Card>
+                                            );
+                                        })}
+                                        {contacts.filter(c=>c.reminder).length===0 && <div className="text-center text-gray-400 mt-20"><Icon name="check-circle" size={48} className="mx-auto mb-4 text-green-500"/><p>¡No tienes tareas pendientes!</p></div>}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* VISTA CONTACTOS */}
                             {view === 'contacts' && (
-                                <Card className="flex flex-col h-full border-0 shadow-md overflow-hidden">
-                                    <div className="p-4 border-b bg-white flex justify-between items-center gap-4">
-                                        <div className="relative flex-1 max-w-md">
-                                            <Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18} />
-                                            <input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                                        </div>
-                                        {selectedIds.size > 0 && (
-                                            <div className="animate-slide-in flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg">
-                                                <span className="font-bold text-sm">{selectedIds.size} seleccionados</span>
-                                                <button onClick={handleBulkDelete} className="flex items-center gap-1 hover:text-red-900 font-medium text-sm"><Icon name="trash-2" size={16} /> Borrar</button>
-                                            </div>
-                                        )}
+                                <Card className="h-full flex flex-col">
+                                    <div className="p-4 border-b flex justify-between items-center">
+                                        <div className="relative w-64"><Icon name="search" className="absolute left-3 top-2.5 text-gray-400" size={18}/><input placeholder="Buscar..." className="w-full pl-10 pr-4 py-2 border rounded" value={searchTerm} onChange={e=>{setSearchTerm(e.target.value); setCurrentPage(1)}}/></div>
+                                        {selectedIds.size>0 && <button onClick={handleBulkDelete} className="text-red-600 font-bold text-sm flex items-center gap-1"><Icon name="trash-2" size={16}/> Borrar {selectedIds.size}</button>}
                                     </div>
                                     <div className="flex-1 overflow-auto">
                                         <table className="w-full text-left border-collapse">
-                                            <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                                            <thead className="bg-gray-50 sticky top-0 z-10">
                                                 <tr>
-                                                    <th className="p-4 w-10"><input type="checkbox" className="custom-checkbox" onChange={handleSelectAll} checked={filteredContacts.length > 0 && selectedIds.size === filteredContacts.length}/></th>
-                                                    <th className="p-4 text-sm font-semibold text-gray-600">Nombre</th>
-                                                    <th className="p-4 text-sm font-semibold text-gray-600">Teléfono</th>
-                                                    <th className="p-4 text-sm font-semibold text-gray-600">Etapa</th>
-                                                    <th className="p-4 text-sm font-semibold text-gray-600">Acciones</th>
+                                                    <th className="p-4 w-10"><input type="checkbox" className="custom-checkbox" onChange={(e)=>{if(e.target.checked)setSelectedIds(new Set(paginated.map(x=>x.id))); else setSelectedIds(new Set())}} checked={paginated.length>0&&selectedIds.size===paginated.length}/></th>
+                                                    <th className="p-4 text-sm font-bold text-gray-600">Nombre</th>
+                                                    <th className="p-4 text-sm font-bold text-gray-600">Teléfono</th>
+                                                    <th className="p-4 text-sm font-bold text-gray-600">Etapa</th>
+                                                    <th className="p-4 text-sm font-bold text-gray-600">Acción</th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="divide-y divide-gray-100 bg-white">
-                                                {filteredContacts.map(c => (
-                                                    <tr key={c.id} className={`hover:bg-blue-50/50 transition-colors ${selectedIds.has(c.id) ? 'bg-blue-50' : ''}`}>
-                                                        <td className="p-4"><input type="checkbox" className="custom-checkbox" checked={selectedIds.has(c.id)} onChange={() => handleSelectRow(c.id)}/></td>
-                                                        <td className="p-4"><div className="font-bold text-gray-800">{c.name}</div><div className="text-xs text-gray-500">{c.segment}</div></td>
+                                            <tbody className="divide-y">
+                                                {paginated.map(c => (
+                                                    <tr key={c.id} className="hover:bg-blue-50">
+                                                        <td className="p-4"><input type="checkbox" className="custom-checkbox" checked={selectedIds.has(c.id)} onChange={()=>{const n=new Set(selectedIds); n.has(c.id)?n.delete(c.id):n.add(c.id); setSelectedIds(n)}}/></td>
+                                                        <td className="p-4"><div className="font-bold">{c.name}</div><div className="text-xs text-gray-500">{c.segment}</div></td>
                                                         <td className="p-4 text-gray-600">{c.phone}</td>
-                                                        <td className="p-4"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-medium">{stages.find(s => s.id === c.stageId)?.name || '---'}</span></td>
-                                                        <td className="p-4"><Button variant="ghost" onClick={() => { setEditingContact(c); setModalOpen(true); }} className="text-blue-600"><Icon name="edit-3" size={16} /></Button></td>
+                                                        <td className="p-4"><span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-bold">{stages.find(s=>s.id===c.stageId)?.name}</span></td>
+                                                        <td className="p-4"><Button variant="ghost" onClick={()=>{setEditingContact(c); setModalOpen(true)}}><Icon name="edit-3" size={16}/></Button></td>
                                                     </tr>
                                                 ))}
-                                                {filteredContacts.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-400">No hay contactos.</td></tr>}
                                             </tbody>
                                         </table>
                                     </div>
+                                    {totalPages>1 && <div className="p-4 border-t flex justify-between items-center bg-gray-50"><span className="text-sm text-gray-500">Página {currentPage}/{totalPages}</span><div className="flex gap-2"><Button variant="secondary" onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={currentPage===1}>Anterior</Button><Button variant="secondary" onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={currentPage===totalPages}>Siguiente</Button></div></div>}
                                 </Card>
                             )}
 
+                            {/* VISTA EMBUDO */}
                             {view === 'funnel' && (
                                 <div className="flex h-full gap-4 overflow-x-auto pb-4">
-                                    {stages.map((stage, idx) => (
-                                        <div key={stage.id} className="min-w-[300px] w-[300px] flex flex-col h-full">
-                                            <div className={`p-3 rounded-t-lg font-bold flex justify-between bg-white border-b-4 border-blue-500/20 shadow-sm mb-2`}>
-                                                {stage.name} <span className="bg-gray-100 px-2 rounded-full text-xs flex items-center font-bold">{contacts.filter(c => c.stageId === stage.id).length}</span>
-                                            </div>
-                                            <div className="bg-slate-100/50 flex-1 p-2 overflow-y-auto rounded-b-lg border border-slate-200/50">
-                                                {contacts.filter(c => c.stageId === stage.id).map(c => (
-                                                    <div key={c.id} onClick={() => { setEditingContact(c); setModalOpen(true); }} className="bg-white p-4 mb-3 rounded-lg shadow-sm border border-gray-100 hover:shadow-md cursor-pointer relative group">
+                                    {stages.map((s, idx) => (
+                                        <div key={s.id} className="min-w-[300px] w-[300px] flex flex-col h-full">
+                                            <div className="p-3 bg-white border-b-4 border-blue-500 font-bold mb-2 rounded-t shadow-sm">{s.name} <span className="ml-2 bg-gray-100 px-2 py-0.5 rounded-full text-xs">{contacts.filter(c=>c.stageId===s.id).length}</span></div>
+                                            <div className="bg-slate-100/50 flex-1 p-2 overflow-y-auto border rounded-b-lg space-y-2">
+                                                {contacts.filter(c=>c.stageId===s.id).slice(0,50).map(c => (
+                                                    <div key={c.id} onClick={()=>{setEditingContact(c); setModalOpen(true)}} className="bg-white p-3 rounded shadow-sm hover:shadow-md cursor-pointer relative group border border-gray-100">
                                                         <div className="font-bold text-gray-800">{c.name}</div>
-                                                        <div className="text-sm text-gray-500 mb-2">{c.phone}</div>
-                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm rounded p-1 z-10">
-                                                            {idx > 0 && <button onClick={(e) => moveStage(c, 'prev', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-left" size={16}/></button>}
-                                                            {idx < stages.length - 1 && <button onClick={(e) => moveStage(c, 'next', e)} className="p-1 hover:bg-gray-100 rounded text-gray-600"><Icon name="chevron-right" size={16}/></button>}
+                                                        <div className="text-sm text-gray-500">{c.phone}</div>
+                                                        {c.reminder && <div className={`mt-2 text-xs flex items-center gap-1 font-bold ${new Date(c.reminder)<new Date()?'text-red-500':'text-orange-500'}`}><Icon name="clock" size={12}/> {new Date(c.reminder).toLocaleDateString()}</div>}
+                                                        <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white p-1 rounded shadow-sm">
+                                                            {idx>0 && <button onClick={(e)=>moveStage(c,'prev',e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-left" size={14}/></button>}
+                                                            {idx<stages.length-1 && <button onClick={(e)=>moveStage(c,'next',e)} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-right" size={14}/></button>}
                                                         </div>
                                                     </div>
                                                 ))}
@@ -560,61 +562,14 @@
                                 </div>
                             )}
 
-                            {view === 'settings' && (
-                                <Card className="p-6 max-w-lg mx-auto text-center">
-                                    <h2 className="text-xl font-bold mb-4">Configuración</h2>
-                                    <p>CRM V6 - Local con Soporte Excel (.xlsx)</p>
-                                </Card>
-                            )}
+                            {view==='settings' && <Card className="p-6 max-w-lg mx-auto text-center"><h2 className="text-xl font-bold">Configuración</h2><p className="text-gray-500 mt-2">CRM V6.3 Local con Tareas</p></Card>}
                         </div>
                     </main>
 
-                    {/* MODAL EDICIÓN CONTACTO */}
-                    {isModalOpen && (
-                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-                                <form onSubmit={(e) => {
-                                    e.preventDefault();
-                                    const fd = new FormData(e.target);
-                                    const d = Object.fromEntries(fd.entries());
-                                    handleSave({ ...d, notes: editingContact?.notes || [] });
-                                }} className="flex flex-col h-full">
-                                    <div className="flex justify-between items-center p-6 border-b">
-                                        <h2 className="text-xl font-bold">{editingContact ? 'Editar' : 'Nuevo'}</h2>
-                                        <button type="button" onClick={() => setModalOpen(false)}><Icon name="x" className="text-gray-400"/></button>
-                                    </div>
-                                    <div className="p-6 overflow-y-auto flex-1 grid grid-cols-2 gap-4">
-                                        <div className="col-span-2"><label className="text-xs font-bold text-gray-500 uppercase">Etapa</label>
-                                        <select name="stageId" defaultValue={editingContact?.stageId || stages[0].id} className="w-full border p-2 rounded">{stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-                                        <Input name="name" label="Nombre" defaultValue={editingContact?.name} required />
-                                        <Input name="phone" label="Teléfono" defaultValue={editingContact?.phone} required />
-                                        <Input name="cedula" label="Cédula" defaultValue={editingContact?.cedula} />
-                                        <Input name="segment" label="Segmento" defaultValue={editingContact?.segment} />
-                                        <Input name="department" label="Depto" defaultValue={editingContact?.department} />
-                                        <Input name="reminder" type="datetime-local" label="Recordatorio" defaultValue={editingContact?.reminder} />
-                                    </div>
-                                    <div className="p-6 border-t flex justify-between bg-gray-50 rounded-b-xl">
-                                        {editingContact ? <Button variant="danger" onClick={() => handleDelete(editingContact.id)}>Eliminar</Button> : <div></div>}
-                                        <div className="flex gap-2"><Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button><Button type="submit">Guardar</Button></div>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* MODAL EXPORTACIÓN */}
-                    {isExportModalOpen && <ExportModal onClose={() => setExportModalOpen(false)} onExport={performExport} />}
-
-                    {/* MODAL MAPEO IMPORTACIÓN */}
-                    {importState.open && (
-                        <ImportMapperModal 
-                            headers={importState.headers} 
-                            sampleRow={importState.rows[0]} 
-                            onCancel={() => setImportState({open:false, headers:[], rows:[]})}
-                            onFinish={executeImport}
-                        />
-                    )}
-
+                    {/* MODALES */}
+                    <ContactModal isOpen={isModalOpen} contact={editingContact} stages={stages} onClose={()=>setModalOpen(false)} onSave={handleSave} onDelete={handleDelete} />
+                    {isExportModalOpen && <ExportModal onClose={()=>setExportModalOpen(false)} onExport={performExport} />}
+                    {importState.open && <ImportMapperModal headers={importState.headers} sampleRow={importState.rows[0]} onCancel={()=>setImportState({open:false, headers:[], rows:[]})} onFinish={execImport} />}
                 </div>
             );
         }
